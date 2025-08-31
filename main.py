@@ -439,6 +439,8 @@ def special_keyboard(key, x, y):
     global car_pos, car_angle
     step = 20
     turn_speed = 5   # Degrees per keypress
+    old_pos = list(car_pos)
+    old_angle = car_angle
 
     angle_rad = math.radians(car_angle - 90)
     if key == GLUT_KEY_UP:
@@ -454,6 +456,11 @@ def special_keyboard(key, x, y):
         car_angle += turn_speed
     elif key == GLUT_KEY_RIGHT:
         car_angle -= turn_speed
+    # --- Strict Collision! ---
+    if is_car_colliding():
+        print("Collision detected!")
+        car_pos[:] = old_pos
+        car_angle = old_angle
     glutPostRedisplay()
 
 
