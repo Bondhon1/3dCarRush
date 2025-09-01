@@ -4,17 +4,43 @@ import random
 from OpenGL.GL import *
 from OpenGL.GLUT import *
 from OpenGL.GLU import *
+import time
 
 # Camera and constants
-camera_offset = [0, -10, 5]  # Camera offset relative to car
-car_pos = [0, -600, 30]  # Start car at y = -GRID_LENGTH, slightly above ground
+camera_offset = [0, -150, 75]  # Camera offset relative to car
+car_pos = [0, -600, 10]  # Start car at y = -GRID_LENGTH, slightly above ground
 car_angle = 0.0   # Angle in degrees
 fovY = 60  # Reduced for better focus
 GRID_LENGTH = 600
 selected_layout = None
-lives = 3
+lives = 10
 road_positions = set()
 border_positions = set()
+
+
+# --- Movement state ---
+normal_speed = 15.0
+boost_speed = 20.0
+slow_speed = 10.0
+
+current_speed = normal_speed
+turn_speed = 3        # degrees per press
+
+collision_flag = False
+collision_start_time = 0
+
+boost_active = False
+boost_start_time = 0
+
+# At the top
+finish_line_pos = None
+finish_line_angle = 0
+finish_crossed = False
+prev_car_pos = car_pos[:]
+finish_line_width = 450  # or match the road width at the finish line
+
+
+
 
 
 # Global constants for borders
@@ -230,7 +256,67 @@ def draw_curved_border(center_x, center_y, radius, half_width, start_angle, end_
             glVertex3f(x2_in, y2_in, height)
             glEnd()
 
+def draw_finish_line(x, y, angle=0, width=450, depth=20, banner_height=40, banner_scale_x=1.0, banner_x_angle=90):
+    glPushMatrix()
+    glTranslatef(x, y, 1.5)
+    glRotatef(angle, 0, 0, 1)
+    # Draw finish line (white rectangle)
+    glColor3f(1.0, 1.0, 1.0)
+    glBegin(GL_QUADS)
+    glVertex3f(-width // 2, -depth // 2, 0)
+    glVertex3f(width // 2, -depth // 2, 0)
+    glVertex3f(width // 2, depth // 2, 0)
+    glVertex3f(-width // 2, depth // 2, 0)
+    glEnd()
+
+    banner_width = width * banner_scale_x
+    base_width = 10  # thickness of base supports
+    base_y_bottom = depth // 2
+    banner_base_z = 150  # fixed height of base tops where banner attaches
+
+    # Draw bases - vertical quads straight up from ground to banner_base_z
+    glColor3f(0.1, 0.1, 0.1)  # dark bases
+
+    # Left base
+    glBegin(GL_QUADS)
+    glVertex3f(-banner_width // 2 - base_width, base_y_bottom, 0)
+    glVertex3f(-banner_width // 2, base_y_bottom, 0)
+    glVertex3f(-banner_width // 2, base_y_bottom, banner_base_z)
+    glVertex3f(-banner_width // 2 - base_width, base_y_bottom, banner_base_z)
+    glEnd()
+
+    # Right base
+    glBegin(GL_QUADS)
+    glVertex3f(banner_width // 2, base_y_bottom, 0)
+    glVertex3f(banner_width // 2 + base_width, base_y_bottom, 0)
+    glVertex3f(banner_width // 2 + base_width, base_y_bottom, banner_base_z)
+    glVertex3f(banner_width // 2, base_y_bottom, banner_base_z)
+    glEnd()
+
+    # Draw banner
+    banner_height_half = banner_height // 2
+    banner_y = base_y_bottom + 10  # slight forward offset from base front face
+
+    glPushMatrix()
+    glTranslatef(0, banner_y, banner_base_z)  # at top of bases (fixed z)
+    glRotatef(banner_x_angle, 1, 0, 0)  # tilt banner around X axis here
+    glColor3f(0.2, 0.2, 0.8)  # blue banner
+    glBegin(GL_QUADS)
+    glVertex3f(-banner_width // 2, -banner_height_half, 0)
+    glVertex3f(banner_width // 2, -banner_height_half, 0)
+    glVertex3f(banner_width // 2, banner_height_half, 0)
+    glVertex3f(-banner_width // 2, banner_height_half, 0)
+    glEnd()
+    glPopMatrix()
+
+    glPopMatrix()
+
+
+
+
+
 def layout1():
+    global finish_line_pos, finish_line_angle
     draw_straight_road(center_x=0, start_y=-GRID_LENGTH, length=2*GRID_LENGTH)
     draw_curved_road(center_x=100, center_y=GRID_LENGTH-1200, curve_radius=200, angle_start=math.pi, angle_end=math.pi+math.pi/2, x_shift=100)
     draw_horizontal_road(center_y=GRID_LENGTH-1400, start_x=200, length=1600)
@@ -245,8 +331,14 @@ def layout1():
     draw_curved_road(center_x=-2300, center_y=GRID_LENGTH, curve_radius=200, angle_start=math.pi, angle_end=math.pi/2, x_shift=100)
     draw_horizontal_road(center_y=GRID_LENGTH+200, start_x=-2200, length=2000)
     draw_curved_road(center_x=-300, center_y=GRID_LENGTH, curve_radius=200, angle_start=0, angle_end=math.pi/2, x_shift=100)
+    # Place finish line at start of first straight
+    finish_line_pos = (0, -GRID_LENGTH-20)
+    finish_line_angle = 0
+    draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle, width=finish_line_width)
+
 
 def layout2():
+    global finish_line_pos, finish_line_angle
     draw_straight_road(center_x=0, start_y=-GRID_LENGTH-2400, length=6*GRID_LENGTH)
     draw_curved_road(center_x=-300, center_y=GRID_LENGTH-3600, curve_radius=200, angle_start=0, angle_end=-math.pi/2, x_shift=100)
     draw_horizontal_road(center_y=GRID_LENGTH-3800, start_x=-3400, length=3200)
@@ -259,8 +351,14 @@ def layout2():
     draw_curved_road(center_x=-6100, center_y=GRID_LENGTH, curve_radius=200, angle_start=math.pi, angle_end=math.pi/2, x_shift=100)
     draw_horizontal_road(center_y=GRID_LENGTH+200, start_x=-6000, length=5800)
     draw_curved_road(center_x=-300, center_y=GRID_LENGTH, curve_radius=200, angle_start=0, angle_end=math.pi/2, x_shift=100)
+    # Place finish line at start of first straight
+    finish_line_pos = (0, -GRID_LENGTH-2400 + 40)
+    finish_line_angle = 0
+    draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle, width=finish_line_width)
+
 
 def layout3():
+    global finish_line_pos, finish_line_angle
     draw_straight_road(center_x=0, start_y=-GRID_LENGTH-2400, length=6*GRID_LENGTH)
     draw_curved_road(center_x=-300, center_y=GRID_LENGTH-3600, curve_radius=200, angle_start=0, angle_end=-math.pi/2, x_shift=100)
     draw_horizontal_road(center_y=GRID_LENGTH-3800, start_x=-5000, length=4800)
@@ -269,6 +367,11 @@ def layout3():
     draw_curved_road(center_x=-5100, center_y=GRID_LENGTH, curve_radius=200, angle_start=math.pi, angle_end=math.pi/2, x_shift=100)
     draw_horizontal_road(center_y=GRID_LENGTH+200, start_x=-5000, length=4800)
     draw_curved_road(center_x=-300, center_y=GRID_LENGTH, curve_radius=200, angle_start=0, angle_end=math.pi/2, x_shift=100)
+    # Place finish line at start of first straight
+    finish_line_pos = (0, -GRID_LENGTH-2400 + 40)
+    finish_line_angle = 0
+    draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle, width=finish_line_width)
+
 
 def draw_road():
     selected_layout()
@@ -325,7 +428,7 @@ def draw_cylinder(radius, height, slices=20):
 
 
 def draw_player_car(x=0, y=0, z=30, car_angle=0, gun_angle=0):
-    scale_factor = 1.2  # Increase size by 1.5x
+    scale_factor = 15  # Increase size by 1.5x
 
     glPushMatrix()
     glTranslatef(x, y, z)
@@ -382,7 +485,7 @@ def draw_player_car(x=0, y=0, z=30, car_angle=0, gun_angle=0):
 def is_car_colliding():
     base_length = 2.5
     base_width = 1.2
-    multiplier = 1.5  # Increase car size by 1.5x
+    multiplier = 1.0  
 
     car_length = base_length * multiplier
     car_width = base_width * multiplier
@@ -406,62 +509,117 @@ def is_car_colliding():
                         return True
     return False
 
+def has_crossed_finish_line():
+    car_front_dist = 2.5 * 15
+    angle_rad = math.radians(car_angle - 90)
+    front_x = car_pos[0] - car_front_dist * math.cos(angle_rad)
+    front_y = car_pos[1] - car_front_dist * math.sin(angle_rad)
+
+    fx, fy = finish_line_pos
+    half_width = finish_line_width / 2
+
+    within_width = (front_x >= fx - half_width) and (front_x <= fx + half_width)
+    crossed_zone = (front_y < fy + 15) and (front_y > fy - 15)
+
+    return within_width and crossed_zone
+
+
+
+def update_car():
+    global car_pos, car_angle, current_speed, prev_car_pos, finish_crossed
+    global collision_flag, collision_start_time
+    global boost_active, boost_start_time
+    if finish_crossed:
+        current_speed = 0
+        glutPostRedisplay()
+        return
+    now = time.time()
+
+    # --- Handle boost timeout ---
+    if boost_active and now - boost_start_time > 3:
+        boost_active = False
+        current_speed = normal_speed
+
+    # --- Collision handling (backward movement) ---
+    if collision_flag:
+        if now - collision_start_time < 3:
+            angle_rad = math.radians(car_angle - 90)
+            old_pos = car_pos[:]
+            car_pos[0] += slow_speed * math.cos(angle_rad)
+            car_pos[1] += slow_speed * math.sin(angle_rad)
+
+            # Check collision while moving backward
+            if is_car_colliding():
+                print("Collision while reversing → stopping immediately")
+                car_pos = old_pos[:]  # stay at safe position
+                collision_flag = False
+                current_speed = 0
+        else:
+            # Done with backward phase
+            collision_flag = False
+            current_speed = normal_speed
+
+        glutPostRedisplay()
+        return
+
+    # --- Normal forward motion ---
+    angle_rad = math.radians(car_angle - 90)
+    new_x = car_pos[0] - current_speed * math.cos(angle_rad)
+    new_y = car_pos[1] - current_speed * math.sin(angle_rad)
+
+    old_pos = car_pos[:]
+    car_pos[0], car_pos[1] = new_x, new_y
+
+    # Check collision going forward
+    if is_car_colliding():
+        print("Collision detected!")
+        collision_flag = True
+        collision_start_time = now
+        car_pos = old_pos[:]  # undo step
+        current_speed = 0     # freeze until handled
+    if not finish_crossed and has_crossed_finish_line():
+        finish_crossed = True
+        print("Win!")
+    prev_car_pos = car_pos[:]
+    
+    glutPostRedisplay()
 
 
 
 def keyboard(key, x, y):
-    global car_pos, car_angle
-    step = 30
-    turn_speed = 5 
-    old_pos = list(car_pos)
-    old_angle = car_angle
-    angle_rad = math.radians(car_angle - 90)
-    if key == b'w':
-        car_pos[0] -= step * math.cos(angle_rad)
-        car_pos[1] -= step * math.sin(angle_rad)
-    elif key == b's':
-        car_pos[0] += step * math.cos(angle_rad)
-        car_pos[1] += step * math.sin(angle_rad)
-    elif key == b'a':
+    global current_speed, car_angle, boost_active, boost_start_time
+
+    
+
+    if key == b'w' and not collision_flag:  # temporary boost
+        boost_active = True
+        boost_start_time = time.time()
+        current_speed = boost_speed
+    elif key == b's' and not collision_flag:  # slow down (not reverse)
+        current_speed = slow_speed
+    elif key == b'a':  # turn left
         car_angle += turn_speed
-    elif key == b'd':
+    elif key == b'd':  # turn right
         car_angle -= turn_speed
-    # --- Strict Collision! ---
-    if is_car_colliding():
-        print("Collision detected!")
-        car_pos[:] = old_pos
-        car_angle = old_angle
-    glutPostRedisplay()
+
 
 
 
 def special_keyboard(key, x, y):
-    global car_pos, car_angle
-    step = 20
-    turn_speed = 5   # Degrees per keypress
-    old_pos = list(car_pos)
-    old_angle = car_angle
+    global current_speed, car_angle, boost_active, boost_start_time
 
-    angle_rad = math.radians(car_angle - 90)
-    if key == GLUT_KEY_UP:
-        car_pos[0] -= step * math.cos(angle_rad)
-        car_pos[1] -= step * math.sin(angle_rad)
-    elif key == GLUT_KEY_DOWN:
-        car_pos[0] += step * math.cos(angle_rad)
-        car_pos[1] += step * math.sin(angle_rad)
+   
 
-        # car_pos stays unchanged
+    if key == GLUT_KEY_UP and not collision_flag:
+        boost_active = True
+        boost_start_time = time.time()
+        current_speed = boost_speed
+    elif key == GLUT_KEY_DOWN and not collision_flag:
+        current_speed = slow_speed
     elif key == GLUT_KEY_LEFT:
-        # Rotate car
         car_angle += turn_speed
     elif key == GLUT_KEY_RIGHT:
         car_angle -= turn_speed
-    # --- Strict Collision! ---
-    if is_car_colliding():
-        print("Collision detected!")
-        car_pos[:] = old_pos
-        car_angle = old_angle
-    glutPostRedisplay()
 
 
 
@@ -478,13 +636,9 @@ def setupCamera():
     total_angle = math.radians(car_angle) + offset_angle
     camera_x = x + offset_distance * math.cos(total_angle)
     camera_y = y + offset_distance * math.sin(total_angle)
-    camera_z = z + camera_offset[2]
+    camera_z = z + camera_offset[2] 
     gluLookAt(camera_x, camera_y, camera_z, x, y, z, 0, 0, 1)
 
-
-
-def idle():
-    glutPostRedisplay()
 
 def showScreen():
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -494,7 +648,13 @@ def showScreen():
     glViewport(0, 0, 1000, 800)
     setupCamera()
     draw_road()
+    if finish_line_pos:
+        draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle)
+
     draw_player_car(car_pos[0], car_pos[1], car_pos[2], car_angle, 0)
+    if finish_crossed:
+        draw_text(400, 400, "Congratulations! You finished the race!")
+
     draw_text(10, 770, "CSE423 Car Game Demo - Extended Road with 90° Turn")
     draw_text(10, 750, f"Lives: {lives}")
 
@@ -521,6 +681,9 @@ def showScreen():
 
     # Draw the scene again from top-down perspective
     draw_road()
+    if finish_line_pos:
+        draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle)
+
     draw_player_car(car_pos[0], car_pos[1], car_pos[2], car_angle, 0)
 
     # Draw a red dot at car position to make it more visible on minimap
@@ -554,12 +717,13 @@ def main():
     glutSpecialFunc(special_keyboard)
     glutKeyboardFunc(keyboard)
     glClearColor(0.0, 0.4, 0.0, 1.0)
-    
+    glutIdleFunc(update_car)
     glutDisplayFunc(showScreen)
-    glutIdleFunc(idle)
+    
     global selected_layout
     layouts = [layout1, layout2, layout3]
     selected_layout = random.choice(layouts)
+    print(selected_layout.__name__)
     glutMainLoop()
 
 if __name__ == "__main__":
