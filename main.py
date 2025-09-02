@@ -16,7 +16,7 @@ selected_layout = None
 lives = 10
 road_positions = set()
 border_positions = set()
-
+cheat_message = ""  # Global or at top
 
 # --- Movement state ---
 normal_speed = 15.0
@@ -256,7 +256,7 @@ def draw_curved_border(center_x, center_y, radius, half_width, start_angle, end_
             glVertex3f(x2_in, y2_in, height)
             glEnd()
 
-def draw_finish_line(x, y, angle=0, width=450, depth=20, banner_height=40, banner_scale_x=1.0, banner_x_angle=90):
+def draw_finish_line(x, y, angle=0, width=450, depth=20, banner_height=30, banner_scale_x=1.0, banner_x_angle=90):
     glPushMatrix()
     glTranslatef(x, y, 1.5)
     glRotatef(angle, 0, 0, 1)
@@ -310,9 +310,6 @@ def draw_finish_line(x, y, angle=0, width=450, depth=20, banner_height=40, banne
     glPopMatrix()
 
     glPopMatrix()
-
-
-
 
 
 def layout1():
@@ -521,44 +518,50 @@ def has_crossed_finish_line():
     within_width = (front_x >= fx - half_width) and (front_x <= fx + half_width)
     crossed_zone = (front_y < fy + 15) and (front_y > fy - 15)
 
-    return within_width and crossed_zone
+    finish_line_direction = 0  # Adjust to your track!
+    direction_error = (car_angle - finish_line_direction) % 360
+    if direction_error > 180:
+        direction_error -= 360
+    facing_forward = abs(direction_error) < 90
 
-
+    # New: Separate logic for results
+    if within_width and crossed_zone:
+        if facing_forward:
+            return "correct"  # Forward crossing
+        else:
+            return "cheat"    # Cheating: wrong direction
+    return None   # Not crossed
 
 def update_car():
     global car_pos, car_angle, current_speed, prev_car_pos, finish_crossed
     global collision_flag, collision_start_time
     global boost_active, boost_start_time
+    global cheat_message
+
     if finish_crossed:
         current_speed = 0
         glutPostRedisplay()
         return
     now = time.time()
 
-    # --- Handle boost timeout ---
     if boost_active and now - boost_start_time > 3:
         boost_active = False
         current_speed = normal_speed
 
-    # --- Collision handling (backward movement) ---
     if collision_flag:
         if now - collision_start_time < 3:
             angle_rad = math.radians(car_angle - 90)
             old_pos = car_pos[:]
             car_pos[0] += slow_speed * math.cos(angle_rad)
             car_pos[1] += slow_speed * math.sin(angle_rad)
-
-            # Check collision while moving backward
             if is_car_colliding():
                 print("Collision while reversing → stopping immediately")
-                car_pos = old_pos[:]  # stay at safe position
+                car_pos = old_pos[:]
                 collision_flag = False
                 current_speed = 0
         else:
-            # Done with backward phase
             collision_flag = False
             current_speed = normal_speed
-
         glutPostRedisplay()
         return
 
@@ -566,7 +569,6 @@ def update_car():
     angle_rad = math.radians(car_angle - 90)
     new_x = car_pos[0] - current_speed * math.cos(angle_rad)
     new_y = car_pos[1] - current_speed * math.sin(angle_rad)
-
     old_pos = car_pos[:]
     car_pos[0], car_pos[1] = new_x, new_y
 
@@ -575,33 +577,49 @@ def update_car():
         print("Collision detected!")
         collision_flag = True
         collision_start_time = now
-        car_pos = old_pos[:]  # undo step
-        current_speed = 0     # freeze until handled
-    if not finish_crossed and has_crossed_finish_line():
-        finish_crossed = True
-        print("Win!")
+        car_pos = old_pos[:]
+        current_speed = 0
+    result = has_crossed_finish_line()
+    if not finish_crossed:
+        if result == "correct":
+            finish_crossed = True
+            print("Win!")
+        elif result == "cheat":
+            cheat_message = "You cannot finish the race backwards! Game restarting..."
+            print(cheat_message)
+            reset_game()
+            # Optionally, show message for a short duration
+
     prev_car_pos = car_pos[:]
-    
     glutPostRedisplay()
 
 
+def reset_game():
+    global car_pos, car_angle, finish_crossed, current_speed, collision_flag, lives
+    car_pos = [0, -600, 10]
+    car_angle = 0.0
+    finish_crossed = False
+    current_speed = normal_speed
+    collision_flag = False
+    lives = 10
+    glutPostRedisplay()
 
 def keyboard(key, x, y):
     global current_speed, car_angle, boost_active, boost_start_time
+    key_lower = key.lower()
 
-    
-
-    if key == b'w' and not collision_flag:  # temporary boost
+    if key_lower == b'r':  # Restart
+        reset_game()
+    elif key_lower == b'w' and not collision_flag:  # temporary boost
         boost_active = True
         boost_start_time = time.time()
         current_speed = boost_speed
-    elif key == b's' and not collision_flag:  # slow down (not reverse)
+    elif key_lower == b's' and not collision_flag:  # slow down (not reverse)
         current_speed = slow_speed
-    elif key == b'a':  # turn left
+    elif key_lower == b'a':  # turn left
         car_angle += turn_speed
-    elif key == b'd':  # turn right
+    elif key_lower == b'd':  # turn right
         car_angle -= turn_speed
-
 
 
 
@@ -650,6 +668,8 @@ def showScreen():
     draw_road()
     if finish_line_pos:
         draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle)
+    if cheat_message:
+        draw_text(300, 360, cheat_message)
 
     draw_player_car(car_pos[0], car_pos[1], car_pos[2], car_angle, 0)
     if finish_crossed:
