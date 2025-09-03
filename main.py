@@ -40,12 +40,114 @@ prev_car_pos = car_pos[:]
 finish_line_width = 450  # or match the road width at the finish line
 
 
-
-
-
 # Global constants for borders
 BORDER_HEIGHT = 30.0
 BORDER_THICKNESS = 12.0
+
+bombs = []
+# --- NEW GLOBALS ---
+health_kits = []   # [(x,y), (x,y), ...]
+kit_size = 20      # size of the 3D plus
+kit_height = 40    # how tall the plus arms go
+num_kits = 4       # number of kits to spawn
+kits_spawned = False
+def spawn_health_kits():
+    global health_kits
+    road_list = list(road_positions)
+    random.shuffle(road_list)
+    health_kits = road_list[:num_kits]  # pick 4 random road positions
+def draw_health_kit(x, y, z=20):
+    glPushMatrix()
+    glTranslatef(x, y, z)
+    glColor3f(1.0, 0.0, 0.0)  # Red color
+    # Draw a 3D plus: center cube + 2 arms X + 2 arms Y
+    def cube(sz):
+        glPushMatrix()
+        glScalef(sz, sz, sz)
+        draw_cube(1.0)
+        glPopMatrix()
+    arm = kit_size
+    thick = kit_size // 2
+    # Center
+    cube(thick)
+    # Arms along X
+    glPushMatrix(); glTranslatef(arm, 0, 0); cube(thick); glPopMatrix()
+    glPushMatrix(); glTranslatef(-arm, 0, 0); cube(thick); glPopMatrix()
+    # Arms along Y
+    glPushMatrix(); glTranslatef(0, arm, 0); cube(thick); glPopMatrix()
+    glPushMatrix(); glTranslatef(0, -arm, 0); cube(thick); glPopMatrix()
+    glPopMatrix()
+def check_health_kit_collision():
+    global health_kits, lives
+    cx, cy, cz = car_pos
+    collected = []
+    for (hx, hy) in health_kits:
+        dist = math.sqrt((cx - hx)**2 + (cy - hy)**2)
+        if dist < 60:  # pickup radius
+            if lives < 10:
+                lives += 1
+                print("Picked up health kit! Lives =", lives)
+            else:
+                print("Health already full!")
+            collected.append((hx, hy))
+    # Remove collected kits
+    health_kits = [pos for pos in health_kits if pos not in collected]
+
+#bomb
+def spawn_bombs():
+    global bombs
+    bombs = []
+    road_list = list(road_positions)
+    random.shuffle(road_list)
+    bombs = road_list[:6]  # pick 6 random road positions
+def draw_bomb(x, y, size=20, height=30):
+    """Draw a 3D bomb at (x, y). Black base with yellow top."""
+    glPushMatrix()
+    glTranslatef(x, y, height // 2)  # Raise bomb slightly above ground
+
+    # Black base - cylinder
+    glColor3f(0.1, 0.0, 0.0)
+    quad = gluNewQuadric()
+    gluCylinder(quad, size * 0.6, size * 0.6, height * 0.7, 20, 5)
+    glPushMatrix()
+    glTranslatef(0, 0, height * 0.7)
+    gluDisk(quad, 0, size * 0.6, 20, 1)  # top disk of base
+    glPopMatrix()
+    gluDisk(quad, 0, size * 0.6, 20, 1)      # bottom disk
+    gluDeleteQuadric(quad)
+
+    # Yellow top - sphere
+    glColor3f(1.0, 1.0, 0.0)
+    glTranslatef(0, 0, height * 0.7)  # move to top of cylinder
+    quad2 = gluNewQuadric()
+    gluSphere(quad2, size * 0.4, 20, 20)
+    gluDeleteQuadric(quad2)
+
+    glPopMatrix()
+
+
+    # Yellow top (smaller circle)
+    glColor3f(1.0, 1.0, 0.0)
+    glBegin(GL_TRIANGLE_FAN)
+    glVertex2f(x, y + size * 0.6)
+    for angle in range(0, 361, 10):
+        rad = math.radians(angle)
+        glVertex2f(x + math.cos(rad) * (size * 0.4),
+                   y + size * 0.6 + math.sin(rad) * (size * 0.4))
+    glEnd()
+def check_bomb_collision():
+    global bombs, lives
+    car_x, car_y = car_pos[0], car_pos[1]
+    bomb_hit = None
+    for (bx, by) in bombs:
+        dist = math.hypot(car_x - bx, car_y - by)
+        if dist < 30:  # collision radius
+            lives -= 1
+            bomb_hit = (bx, by)
+            break
+    if bomb_hit:
+        bombs.remove(bomb_hit)
+
 
 def add_rectangle_to_set(xmin, xmax, ymin, ymax, store, dx=12, dy=12):
     for x in range(int(xmin), int(xmax)+1, dx):
@@ -353,7 +455,6 @@ def layout2():
     finish_line_angle = 0
     draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle, width=finish_line_width)
 
-
 def layout3():
     global finish_line_pos, finish_line_angle
     draw_straight_road(center_x=0, start_y=-GRID_LENGTH-2400, length=6*GRID_LENGTH)
@@ -368,6 +469,7 @@ def layout3():
     finish_line_pos = (0, -GRID_LENGTH-2400 + 40)
     finish_line_angle = 0
     draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle, width=finish_line_width)
+  
 
 
 def draw_road():
@@ -564,6 +666,8 @@ def update_car():
             current_speed = normal_speed
         glutPostRedisplay()
         return
+    check_health_kit_collision()
+    check_bomb_collision()
 
     # --- Normal forward motion ---
     angle_rad = math.radians(car_angle - 90)
@@ -668,20 +772,36 @@ def showScreen():
     draw_road()
     if finish_line_pos:
         draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle)
+   
     if cheat_message:
         draw_text(300, 360, cheat_message)
 
     draw_player_car(car_pos[0], car_pos[1], car_pos[2], car_angle, 0)
     if finish_crossed:
         draw_text(400, 400, "Congratulations! You finished the race!")
-
+   
     draw_text(10, 770, "CSE423 Car Game Demo - Extended Road with 90° Turn")
     draw_text(10, 750, f"Lives: {lives}")
+        # --- Spawn health kits once ---
+    global kits_spawned
+    global kits_spawned
+    if not kits_spawned:
+       spawn_health_kits()
+       spawn_bombs()
+       kits_spawned = True
+
+    
+    # --- Draw health kits (main view) ---
+    for (hx, hy) in health_kits:
+        draw_health_kit(hx, hy, 20)
+    for (bx, by) in bombs:
+        draw_bomb(bx, by, 20)
 
     # --- Mini viewport (top-right corner) ---
     mini_width, mini_height = 200, 200
     glViewport(1000 - mini_width - 20, 800 - mini_height - 20, mini_width, mini_height)
-
+    
+    
     # Save current matrices
     glMatrixMode(GL_PROJECTION)
     glPushMatrix()
@@ -744,6 +864,7 @@ def main():
     layouts = [layout1, layout2, layout3]
     selected_layout = random.choice(layouts)
     print(selected_layout.__name__)
+    spawn_health_kits()
     glutMainLoop()
 
 if __name__ == "__main__":
