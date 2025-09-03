@@ -5,10 +5,11 @@ from OpenGL.GL import *
 from OpenGL.GLUT import *
 from OpenGL.GLU import *
 import time
+import numpy as np  # At top with other imports
 
 # Camera and constants
 camera_offset = [0, -150, 75]  # Camera offset relative to car
-car_pos = [0, -600, 10]  # Start car at y = -GRID_LENGTH, slightly above ground
+car_pos = [50, -600, 10]  # Start car at y = -GRID_LENGTH, slightly above ground
 car_angle = 0.0   # Angle in degrees
 fovY = 60  # Reduced for better focus
 GRID_LENGTH = 600
@@ -17,7 +18,7 @@ lives = 10
 road_positions = set()
 border_positions = set()
 cheat_message = ""  # Global or at top
-
+paused = False
 # --- Movement state ---
 normal_speed = 15.0
 boost_speed = 20.0
@@ -38,6 +39,9 @@ finish_line_angle = 0
 finish_crossed = False
 prev_car_pos = car_pos[:]
 finish_line_width = 450  # or match the road width at the finish line
+
+
+
 
 
 # Global constants for borders
@@ -147,7 +151,6 @@ def check_bomb_collision():
             break
     if bomb_hit:
         bombs.remove(bomb_hit)
-
 
 def add_rectangle_to_set(xmin, xmax, ymin, ymax, store, dx=12, dy=12):
     for x in range(int(xmin), int(xmax)+1, dx):
@@ -455,6 +458,7 @@ def layout2():
     finish_line_angle = 0
     draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle, width=finish_line_width)
 
+
 def layout3():
     global finish_line_pos, finish_line_angle
     draw_straight_road(center_x=0, start_y=-GRID_LENGTH-2400, length=6*GRID_LENGTH)
@@ -469,7 +473,6 @@ def layout3():
     finish_line_pos = (0, -GRID_LENGTH-2400 + 40)
     finish_line_angle = 0
     draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle, width=finish_line_width)
-  
 
 
 def draw_road():
@@ -580,6 +583,208 @@ def draw_player_car(x=0, y=0, z=30, car_angle=0, gun_angle=0):
 
     glPopMatrix()
 
+# --- Enemy cars ---
+class EnemyCar:
+    def __init__(self, color, path_points, speed):
+        self.color = color
+        self.path_points = path_points  # List of (x, y, z)
+        self.segment = 0
+        self.position = list(path_points[0])
+        self.speed = speed
+        self.finished = False
+
+        # Initialize angle toward second waypoint (if exists)
+        if len(path_points) > 1:
+            dx = path_points[1][0] - path_points[0][0]
+            dy = path_points[1][1] - path_points[0][1]
+            self.angle = math.degrees(math.atan2(dy, dx))
+        else:
+            self.angle = 0
+
+
+# All enemy cars (created after layout selected)
+enemy_cars = []
+ENEMY_COUNT = 3  # Set to 2 or 3 as needed
+
+enemy_win = False  # Track if enemy finishes before player
+
+def draw_enemy_car(x=0, y=0, z=30, car_angle=0):
+    scale_factor = 15
+    glPushMatrix()
+    glTranslatef(x, y, z)
+    glRotatef(car_angle, 0, 0, 1)
+    # Body - red enemy color
+    glPushMatrix()
+    glScalef(2.5 * scale_factor, 1.2 * scale_factor, 0.6 * scale_factor)
+    glColor3f(0.9, 0.3, 0.3)  # Enemy: red
+    draw_cube(1.0)
+    glPopMatrix()
+    # Cabin - darker red
+    glPushMatrix()
+    glTranslatef(0.0, 0.0, 0.65 * scale_factor)
+    glScalef(1.2 * scale_factor, 0.9 * scale_factor, 0.55 * scale_factor)
+    glColor3f(0.7, 0.1, 0.1)
+    draw_cube(1.0)
+    glPopMatrix()
+    # Wheels
+    wheel_positions = [(-1.4 * scale_factor, 1.3 * scale_factor, 0.0),
+                      (-1.4 * scale_factor, -1.3 * scale_factor, 0.0),
+                      (1.4 * scale_factor, 1.3 * scale_factor, 0.0),
+                      (1.4 * scale_factor, -1.3 * scale_factor, 0.0)]
+    for wx, wy, wz in wheel_positions:
+        glPushMatrix()
+        glTranslatef(wx, wy, wz)
+        glRotatef(90, 1, 0, 0)
+        glColor3f(0.05, 0.05, 0.05)
+        draw_cylinder(0.3 * scale_factor, 0.2 * scale_factor)
+        glPopMatrix()
+    glPopMatrix()
+
+def get_enemy_paths_for_layout(layout_num):
+    # Create displacements for each enemy car
+    offsets = np.linspace(-100, 100, ENEMY_COUNT)
+    base_paths = []
+
+    # Define waypoints as before for each layout
+    if layout_num == 1:
+        base_waypoints = [
+            (0, -600, 10), (30, 800, 10), (-2300, 800, 10),
+            (-2300, -3600, 10), (2000, -3600, 10),
+            (2000, -800, 10), (0, -800, 10), (0, finish_line_pos[1] + 40, 10)
+        ]
+    elif layout_num == 2:
+        base_waypoints = [
+            (0, -600, 10), (30, 800, 10), (-6200, 800, 10),
+            (-6200, -4800, 10), (-3600, -4800, 10),
+            (-3600, -3200, 10), (0, -3200, 10), (0, finish_line_pos[1] + 40, 10)
+        ]
+    elif layout_num == 3:
+        base_waypoints = [
+            (0, -600, 10), (0, 800, 10), (-5200, 800, 10),
+            (-5200, -3200, 10), (0, -3200, 10), (0, finish_line_pos[1] + 40, 10)
+        ]
+    else:
+        return []
+
+    paths = []
+    for i, offset in enumerate(offsets):
+        
+        # Displace in X for vertical segments, in Y for horizontal segments
+        enemy_path = []
+        for x, y, z in base_waypoints:
+            # You can tune here based on segment orientation:
+            # For vertical segments
+            if abs(x - base_waypoints[0][0]) < 1000:
+                enemy_path.append((x + offset, y, z))
+            # For horizontal segments, displace Y
+            elif abs(y - base_waypoints[0][1]) < 1000:
+                enemy_path.append((x, y + offset, z))
+            else:
+                # For curves or others, displace both
+                enemy_path.append((x + offset, y + offset, z))
+        paths.append(enemy_path)
+    return paths
+
+def enemy_has_crossed_finish_line_with_position(car):
+    global finish_line_pos, finish_line_width
+    car_front_dist = 2.5 * 15
+    angle_rad = math.radians(car.angle - 90)
+    front_x = car.position[0] - car_front_dist * math.cos(angle_rad)
+    front_y = car.position[1] - car_front_dist * math.sin(angle_rad)
+
+    fx, fy = finish_line_pos[0], finish_line_pos[1]
+    half_width = finish_line_width / 2
+
+    within_width = (front_x >= fx - half_width) and (front_x <= fx + half_width)
+    crossed_zone = (front_y < fy + 15) and (front_y > fy - 15)
+
+    finish_line_direction = 0  # Adjust for your track finish line angle
+    direction_error = (car.angle - finish_line_direction) % 360
+    if direction_error > 180:
+        direction_error -= 360
+    facing_forward = abs(direction_error) < 90
+
+    if within_width and crossed_zone:
+        if facing_forward:
+            return True  # Enemy car crossed finish correctly
+        else:
+            return False  # Crossed backward or cheat (can treat differently if needed)
+    return False  # Not crossed
+
+# At initialization, set car.angle = math.atan2(start_dy, start_dx)
+
+def update_enemy_cars():
+    global enemy_win, finish_crossed
+    for car in enemy_cars:
+        if enemy_win:
+            continue
+        if car.finished:
+            car.position = list(car.path_points[-1])
+            if len(car.path_points) > 1:
+                dx = car.path_points[-1][0] - car.path_points[-2][0]
+                dy = car.path_points[-1][1] - car.path_points[-2][1]
+                car.angle = math.degrees(math.atan2(dy, dx))
+            continue
+
+        if enemy_has_crossed_finish_line_with_position(car):
+            print("Enemy car crossed finish line!")
+            car.finished = True
+            if not finish_crossed and not enemy_win:
+                enemy_win = True
+            car.position = list(car.path_points[-1])
+            continue
+
+        # Existing movement code follows...
+
+
+        if car.segment >= len(car.path_points) - 1:
+            continue
+        curr = car.position
+        goal = car.path_points[car.segment + 1]
+        dx, dy = goal[0] - curr[0], goal[1] - curr[1]
+        dist = math.hypot(dx, dy)
+        if dist == 0:
+            continue
+
+        # Smooth angle update
+        target_angle = math.atan2(dy, dx)
+        current_angle_rad = math.radians(car.angle)
+        angle_diff = ((target_angle - current_angle_rad + math.pi) % (2 * math.pi)) - math.pi
+        turn_rate_rad = math.radians(4.0)
+        if abs(angle_diff) < turn_rate_rad:
+            current_angle_rad = target_angle
+        else:
+            current_angle_rad += turn_rate_rad if angle_diff > 0 else -turn_rate_rad
+        car.angle = math.degrees(current_angle_rad)
+
+        # Compute projection to limit side drift
+        to_goal = np.array([dx, dy]) / dist
+        car_heading = np.array([math.cos(current_angle_rad), math.sin(current_angle_rad)])
+        proj_length = np.dot(car_heading, to_goal)
+        if proj_length < 0:
+            move_x, move_y = 0, 0  # Prevent backward movement here
+        else:
+            effective_speed = car.speed * proj_length
+            move_x = effective_speed * car_heading[0]
+            move_y = effective_speed * car_heading[1]
+
+        # Update position and clamp inside bounds
+        car.position[0] += move_x
+        car.position[1] += move_y
+
+        
+        # Waypoint arrival update (with print)
+        new_dx, new_dy = goal[0] - car.position[0], goal[1] - car.position[1]
+        new_dist = math.hypot(new_dx, new_dy)
+        if new_dist < car.speed:
+            car.position = list(goal)
+            car.segment += 1
+            print(f"Enemy car reached waypoint {car.segment} at {car.position}")
+            if car.segment == len(car.path_points) - 1:
+                # Wait for the finish line crossing logic above to set finished
+                pass
+
+
 
 def is_car_colliding():
     base_length = 2.5
@@ -635,11 +840,22 @@ def has_crossed_finish_line():
     return None   # Not crossed
 
 def update_car():
-    global car_pos, car_angle, current_speed, prev_car_pos, finish_crossed
+    global car_pos, car_angle, current_speed, prev_car_pos, finish_crossed, enemy_win
     global collision_flag, collision_start_time
     global boost_active, boost_start_time
     global cheat_message
-
+    global paused
+    if paused:
+        return  # Game is paused
+    if enemy_win or finish_crossed:
+        current_speed = 0
+        glutPostRedisplay()
+        return
+    update_enemy_cars()
+    if enemy_win:
+        current_speed = 0
+        glutPostRedisplay()
+        return
     if finish_crossed:
         current_speed = 0
         glutPostRedisplay()
@@ -657,7 +873,7 @@ def update_car():
             car_pos[0] += slow_speed * math.cos(angle_rad)
             car_pos[1] += slow_speed * math.sin(angle_rad)
             if is_car_colliding():
-                print("Collision while reversing → stopping immediately")
+                
                 car_pos = old_pos[:]
                 collision_flag = False
                 current_speed = 0
@@ -669,6 +885,7 @@ def update_car():
     check_health_kit_collision()
     check_bomb_collision()
 
+
     # --- Normal forward motion ---
     angle_rad = math.radians(car_angle - 90)
     new_x = car_pos[0] - current_speed * math.cos(angle_rad)
@@ -678,7 +895,7 @@ def update_car():
 
     # Check collision going forward
     if is_car_colliding():
-        print("Collision detected!")
+        
         collision_flag = True
         collision_start_time = now
         car_pos = old_pos[:]
@@ -687,12 +904,12 @@ def update_car():
     if not finish_crossed:
         if result == "correct":
             finish_crossed = True
-            print("Win!")
+            
         elif result == "cheat":
             cheat_message = "You cannot finish the race backwards! Game restarting..."
             print(cheat_message)
             reset_game()
-            # Optionally, show message for a short duration
+            
 
     prev_car_pos = car_pos[:]
     glutPostRedisplay()
@@ -706,13 +923,30 @@ def reset_game():
     current_speed = normal_speed
     collision_flag = False
     lives = 10
+    global enemy_cars, enemy_win
+    # Reset enemy cars to initial segment/position, and reset angles properly
+    for ecar in enemy_cars:
+        ecar.position = list(ecar.path_points[0])
+        ecar.segment = 0
+        if len(ecar.path_points) > 1:
+            dx = ecar.path_points[1][0] - ecar.path_points[0][0]
+            dy = ecar.path_points[1][1] - ecar.path_points[0][1]
+            ecar.angle = math.degrees(math.atan2(dy, dx))
+        else:
+            ecar.angle = 0
+        ecar.finished = False
+    enemy_win = False
+
     glutPostRedisplay()
 
-def keyboard(key, x, y):
-    global current_speed, car_angle, boost_active, boost_start_time
-    key_lower = key.lower()
 
-    if key_lower == b'r':  # Restart
+def keyboard(key, x, y):
+    global current_speed, car_angle, boost_active, boost_start_time, paused
+    key_lower = key.lower()
+    
+    if key_lower == b'p':  # Pause/resume
+        paused = not paused
+    elif key_lower == b'r':  # Restart
         reset_game()
     elif key_lower == b'w' and not collision_flag:  # temporary boost
         boost_active = True
@@ -743,6 +977,19 @@ def special_keyboard(key, x, y):
     elif key == GLUT_KEY_RIGHT:
         car_angle -= turn_speed
 
+def mouse_click(button, state, x, y):
+    if button == GLUT_LEFT_BUTTON and state == GLUT_DOWN:
+        # Convert window x, y to OpenGL world coordinates
+        viewport = glGetIntegerv(GL_VIEWPORT)
+        modelview = glGetDoublev(GL_MODELVIEW_MATRIX)
+        projection = glGetDoublev(GL_PROJECTION_MATRIX)
+        winX = x
+        winY = viewport[3] - y  # OpenGL's y=0 is at the bottom
+        # Read z from depth buffer at x, y
+        winZ = glReadPixels(winX, winY, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT)
+        world_x, world_y, world_z = gluUnProject(winX, winY, winZ, modelview, projection, viewport)
+        print(f"Clicked position: x={world_x:.1f}, y={world_y:.1f}, z=10")
+        # z=10 by convention; you can use world_z for exact value if needed
 
 
 def setupCamera():
@@ -765,26 +1012,29 @@ def setupCamera():
 def showScreen():
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glLoadIdentity()
-
+    
     # --- Main viewport (full window) ---
     glViewport(0, 0, 1000, 800)
     setupCamera()
     draw_road()
     if finish_line_pos:
         draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle)
-   
     if cheat_message:
         draw_text(300, 360, cheat_message)
+    if enemy_win:
+        draw_text(350, 400, "Game Over! Enemy finished first.")
+
 
     draw_player_car(car_pos[0], car_pos[1], car_pos[2], car_angle, 0)
+    for ecar in enemy_cars:
+        draw_enemy_car(ecar.position[0], ecar.position[1], ecar.position[2], ecar.angle)
     if finish_crossed:
         draw_text(400, 400, "Congratulations! You finished the race!")
-   
+
     draw_text(10, 770, "CSE423 Car Game Demo - Extended Road with 90° Turn")
     draw_text(10, 750, f"Lives: {lives}")
-        # --- Spawn health kits once ---
     global kits_spawned
-    global kits_spawned
+
     if not kits_spawned:
        spawn_health_kits()
        spawn_bombs()
@@ -800,8 +1050,7 @@ def showScreen():
     # --- Mini viewport (top-right corner) ---
     mini_width, mini_height = 200, 200
     glViewport(1000 - mini_width - 20, 800 - mini_height - 20, mini_width, mini_height)
-    
-    
+
     # Save current matrices
     glMatrixMode(GL_PROJECTION)
     glPushMatrix()
@@ -825,6 +1074,10 @@ def showScreen():
         draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle)
 
     draw_player_car(car_pos[0], car_pos[1], car_pos[2], car_angle, 0)
+    # Draw all enemy cars (main view)
+    for ecar in enemy_cars:
+        draw_enemy_car(ecar.position[0], ecar.position[1], ecar.position[2], ecar.angle)
+
 
     # Draw a red dot at car position to make it more visible on minimap
     glColor3f(1.0, 0.0, 0.0)
@@ -859,11 +1112,19 @@ def main():
     glClearColor(0.0, 0.4, 0.0, 1.0)
     glutIdleFunc(update_car)
     glutDisplayFunc(showScreen)
-    
+    glutMouseFunc(mouse_click)
     global selected_layout
     layouts = [layout1, layout2, layout3]
     selected_layout = random.choice(layouts)
     print(selected_layout.__name__)
+    layout_index = layouts.index(selected_layout) + 1
+    # finish_line_pos is set by layout function after draw_road()
+    # So, call selected_layout to set finish_line_pos
+    selected_layout()
+    paths = get_enemy_paths_for_layout(layout_index)
+    enemy_speeds = [random.uniform(12, 18) for _ in range(ENEMY_COUNT)]  # Each enemy has different speed
+    global enemy_cars
+    enemy_cars = [EnemyCar((0.9, 0.3, 0.3), path, speed) for path, speed in zip(paths, enemy_speeds)]
     spawn_health_kits()
     glutMainLoop()
 
