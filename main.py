@@ -1041,8 +1041,6 @@ def showScreen():
         draw_enemy_car(ecar.position[0], ecar.position[1], ecar.position[2], ecar.angle)
     if finish_crossed:
         draw_text(400, 400, "Congratulations! You finished the race!")
-
-    draw_text(10, 770, "CSE423 Car Game Demo - Extended Road with 90° Turn")
     draw_text(10, 750, f"Lives: {lives}")
     global kits_spawned
 
@@ -1058,7 +1056,9 @@ def showScreen():
     for (bx, by) in bombs:
         draw_bomb(bx, by, 20)
 
-    draw_life_counter()    
+    draw_life_counter()   
+    # Draw the comprehensive dashboard (replaces individual text elements)
+    draw_dashboard() 
 
     # --- Mini viewport (top-right corner) ---
     mini_width, mini_height = 200, 200
@@ -1164,6 +1164,114 @@ def draw_life_counter():
     glMatrixMode(GL_PROJECTION)
     glPopMatrix()
     glMatrixMode(GL_MODELVIEW)
+
+def draw_dashboard():
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    gluOrtho2D(0, 1000, 0, 800)
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+    
+    # Dashboard background (semi-transparent black panel)
+    glColor4f(0.1, 0.1, 0.1, 0.8)  # Dark gray with transparency
+    glBegin(GL_QUADS)
+    glVertex2f(10, 10)
+    glVertex2f(300, 10)
+    glVertex2f(300, 150)
+    glVertex2f(10, 150)
+    glEnd()
+    
+    # Dashboard border
+    glColor3f(0.5, 0.5, 0.5)
+    glLineWidth(2.0)
+    glBegin(GL_LINE_LOOP)
+    glVertex2f(10, 10)
+    glVertex2f(300, 10)
+    glVertex2f(300, 150)
+    glVertex2f(10, 150)
+    glEnd()
+    
+    # Speed display
+    glColor3f(0.0, 1.0, 1.0)  # Cyan for speed
+    glRasterPos2f(20, 130)
+    speed_text = f"SPEED: {int(current_speed)} km/h"
+    for ch in speed_text:
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
+    
+    # Boost indicator
+    if boost_active:
+        glColor3f(1.0, 0.5, 0.0)  # Orange for active boost
+        boost_text = "BOOST: ACTIVE!"
+    else:
+        glColor3f(0.7, 0.7, 0.7)  # Gray for inactive boost
+        boost_text = "BOOST: READY"
+    glRasterPos2f(20, 105)
+    for ch in boost_text:
+        glutBitmapCharacter(GLUT_BITMAP_9_BY_15, ord(ch))
+    
+    # Lives counter (numeric)
+    glColor3f(1.0, 0.0, 0.0) if lives < 5 else glColor3f(0.0, 1.0, 0.0)
+    glRasterPos2f(20, 80)
+    lives_text = f"LIVES: {lives}/10"
+    for ch in lives_text:
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
+    
+    # Game status
+    if finish_crossed:
+        glColor3f(0.0, 1.0, 0.0)  # Green for victory
+        status_text = "STATUS: FINISHED!"
+    elif enemy_win:
+        glColor3f(1.0, 0.0, 0.0)  # Red for loss
+        status_text = "STATUS: ENEMY WON!"
+    elif paused:
+        glColor3f(1.0, 1.0, 0.0)  # Yellow for paused
+        status_text = "STATUS: PAUSED"
+    else:
+        glColor3f(0.0, 1.0, 1.0)  # Cyan for racing
+        status_text = "STATUS: RACING"
+    
+    glRasterPos2f(20, 55)
+    for ch in status_text:
+        glutBitmapCharacter(GLUT_BITMAP_9_BY_15, ord(ch))
+    
+    # Controls reminder
+    glColor3f(0.7, 0.7, 0.7)
+    glRasterPos2f(20, 30)
+    controls_text = "W/S: Speed  A/D: Turn  R: Reset  P: Pause"
+    for ch in controls_text:
+        glutBitmapCharacter(GLUT_BITMAP_8_BY_13, ord(ch))
+    
+    # Visual life bars (on the right side of dashboard)
+    life_bar_start_x = 200
+    life_bar_start_y = 130
+    life_bar_length = 15
+    life_bar_thickness = 4
+    life_bar_spacing = 2
+    
+    for i in range(10):
+        if i < lives:
+            glColor3f(0.0, 1.0, 0.0) if lives >= 5 else glColor3f(1.0, 0.0, 0.0)
+        else:
+            glColor3f(0.3, 0.3, 0.3)
+        
+        x_pos = life_bar_start_x + (i * (life_bar_length + life_bar_spacing))
+        
+        glBegin(GL_QUADS)
+        glVertex2f(x_pos, life_bar_start_y)
+        glVertex2f(x_pos + life_bar_length, life_bar_start_y)
+        glVertex2f(x_pos + life_bar_length, life_bar_start_y - life_bar_thickness)
+        glVertex2f(x_pos, life_bar_start_y - life_bar_thickness)
+        glEnd()
+    
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+
+# Remove the old draw_life_counter function and replace it with this dashboard
+# Also remove the individual text drawing calls from showScreen and replace with this
 
 
 
