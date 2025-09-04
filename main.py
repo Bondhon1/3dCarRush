@@ -25,10 +25,18 @@ boost_speed = 20.0
 slow_speed = 10.0
 
 current_speed = normal_speed
-turn_speed = 3        # degrees per press
 
+
+turn_speed = 3        # degrees per press
+CAR_LENGTH = 15 * 2.5
+CAR_WIDTH = 15 * 1.2
+
+enemy_player_collision_flag = False
+enemy_player_collision_start_time = 0
 collision_flag = False
 collision_start_time = 0
+COLLISION_DURATION = 2.0     # seconds
+COLLISION_PUSH_SPEED = 0.5   # constant displacement per frame
 
 boost_active = False
 boost_start_time = 0
@@ -434,7 +442,7 @@ def layout1():
     draw_horizontal_road(center_y=GRID_LENGTH+200, start_x=-2200, length=2000)
     draw_curved_road(center_x=-300, center_y=GRID_LENGTH, curve_radius=200, angle_start=0, angle_end=math.pi/2, x_shift=100)
     # Place finish line at start of first straight
-    finish_line_pos = (0, -GRID_LENGTH-20)
+    finish_line_pos = (0, -GRID_LENGTH-60)
     finish_line_angle = 0
     draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle, width=finish_line_width)
 
@@ -592,6 +600,9 @@ class EnemyCar:
         self.position = list(path_points[0])
         self.speed = speed
         self.finished = False
+        self.collision_response = {}
+        self.lives = 5
+        
 
         # Initialize angle toward second waypoint (if exists)
         if len(path_points) > 1:
@@ -642,7 +653,7 @@ def draw_enemy_car(x=0, y=0, z=30, car_angle=0):
 
 def get_enemy_paths_for_layout(layout_num):
     # Create displacements for each enemy car
-    offsets = np.linspace(-100, 100, ENEMY_COUNT)
+    offsets = np.linspace(-100, 100, ENEMY_COUNT+1)
     base_paths = []
 
     # Define waypoints as before for each layout
@@ -668,6 +679,8 @@ def get_enemy_paths_for_layout(layout_num):
 
     paths = []
     for i, offset in enumerate(offsets):
+        if i ==2:
+            continue
         
         # Displace in X for vertical segments, in Y for horizontal segments
         enemy_path = []
@@ -685,39 +698,31 @@ def get_enemy_paths_for_layout(layout_num):
         paths.append(enemy_path)
     return paths
 
-def enemy_has_crossed_finish_line_with_position(car):
+def enemy_crossed_finish_area(car):
     global finish_line_pos, finish_line_width
-    car_front_dist = 2.5 * 15
-    angle_rad = math.radians(car.angle - 90)
-    front_x = car.position[0] - car_front_dist * math.cos(angle_rad)
-    front_y = car.position[1] - car_front_dist * math.sin(angle_rad)
-
-    fx, fy = finish_line_pos[0], finish_line_pos[1]
+    # Define a rectangular area around the finish line (adjust dimensions as needed)
+    fx, fy = finish_line_pos
     half_width = finish_line_width / 2
+    
+    # Define length tolerance before/after finish line y coordinate
+    length_tolerance = 50  # Adjust for track scale
+    
+    # Get enemy car position (ignore front offset and angle)
+    cx, cy = car.position[0], car.position[1]
 
-    within_width = (front_x >= fx - half_width) and (front_x <= fx + half_width)
-    crossed_zone = (front_y < fy + 15) and (front_y > fy - 15)
+    within_width = (cx >= fx - half_width) and (cx <= fx + half_width)
+    within_length = (cy >= fy - length_tolerance) and (cy <= fy + length_tolerance)
 
-    finish_line_direction = 0  # Adjust for your track finish line angle
-    direction_error = (car.angle - finish_line_direction) % 360
-    if direction_error > 180:
-        direction_error -= 360
-    facing_forward = abs(direction_error) < 90
+    if within_width and within_length:
+        return True
+    return False
 
-    if within_width and crossed_zone:
-        if facing_forward:
-            return True  # Enemy car crossed finish correctly
-        else:
-            return False  # Crossed backward or cheat (can treat differently if needed)
-    return False  # Not crossed
 
 # At initialization, set car.angle = math.atan2(start_dy, start_dx)
 
 def update_enemy_cars():
     global enemy_win, finish_crossed
     for car in enemy_cars:
-        if enemy_win:
-            continue
         if car.finished:
             car.position = list(car.path_points[-1])
             if len(car.path_points) > 1:
@@ -726,15 +731,13 @@ def update_enemy_cars():
                 car.angle = math.degrees(math.atan2(dy, dx))
             continue
 
-        if enemy_has_crossed_finish_line_with_position(car):
-            print("Enemy car crossed finish line!")
+        if enemy_crossed_finish_area(car):
+            
             car.finished = True
             if not finish_crossed and not enemy_win:
                 enemy_win = True
             car.position = list(car.path_points[-1])
             continue
-
-        # Existing movement code follows...
 
 
         if car.segment >= len(car.path_points) - 1:
@@ -757,20 +760,40 @@ def update_enemy_cars():
             current_angle_rad += turn_rate_rad if angle_diff > 0 else -turn_rate_rad
         car.angle = math.degrees(current_angle_rad)
 
-        # Compute projection to limit side drift
+                # Compute projection to limit side drift
         to_goal = np.array([dx, dy]) / dist
         car_heading = np.array([math.cos(current_angle_rad), math.sin(current_angle_rad)])
         proj_length = np.dot(car_heading, to_goal)
+
+        # --- Apply collision speed multiplier (per enemy) ---
+        multiplier = 1.0
+        key = id(car)
+        if key in active_collision_effects:
+            m, start_time = active_collision_effects[key]
+            if time.time() - start_time < COLLISION_EFFECT_TIME:
+                multiplier = m
+            else:
+                del active_collision_effects[key]
+
         if proj_length < 0:
-            move_x, move_y = 0, 0  # Prevent backward movement here
+            move_x, move_y = 0.0, 0.0  # Prevent backward movement here
         else:
-            effective_speed = car.speed * proj_length
+            effective_speed = car.speed * proj_length * multiplier
             move_x = effective_speed * car_heading[0]
             move_y = effective_speed * car_heading[1]
 
-        # Update position and clamp inside bounds
+        # Update position
         car.position[0] += move_x
         car.position[1] += move_y
+        multiplier = 1.0
+        if "enemy" in active_collision_effects:
+            m, start_time = active_collision_effects["enemy"]
+            if time.time() - start_time < COLLISION_EFFECT_TIME:
+                multiplier = m
+            else:
+                del active_collision_effects["enemy"]
+
+      
 
         
         # Waypoint arrival update (with print)
@@ -779,11 +802,86 @@ def update_enemy_cars():
         if new_dist < car.speed:
             car.position = list(goal)
             car.segment += 1
-            print(f"Enemy car reached waypoint {car.segment} at {car.position}")
+            
             if car.segment == len(car.path_points) - 1:
                 # Wait for the finish line crossing logic above to set finished
                 pass
+colliding_enemies = set()
+def check_collision(player_pos, enemy_pos, car_length, car_width, tolerance=0):
+    # Compute half sizes plus optional tolerance for "forgiving" edge
+    half_len = car_length / 2 + tolerance
+    half_wid = car_width / 2 + tolerance
 
+    px, py = player_pos
+    ex, ey = enemy_pos
+
+    # Collision: rectangles touch or overlap in x and y
+    if (abs(px - ex) <= 2 * half_len) and (abs(py - ey) <= 2 * half_wid):
+        return True
+    return False
+
+
+def check_enemy_player_collision():
+    global enemy_player_collision_flag, enemy_player_collision_start_time, colliding_enemies, lives
+    colliding_enemies.clear()
+    player_pos = car_pos[:2]
+    collision = False
+    for enemy in enemy_cars:
+        enemy_pos = enemy.position[:2]
+        if check_collision(player_pos, enemy_pos, CAR_LENGTH, CAR_WIDTH, tolerance=5):
+            collision = True
+            colliding_enemies.add(enemy)
+    # Only trigger a collision event if not already active
+    if collision and not enemy_player_collision_flag:
+        enemy_player_collision_flag = True
+        print('Collision detected!')
+        enemy_player_collision_start_time = time.time()
+        lives -= 1
+        return True
+    return False
+
+
+
+# Add global dicts to track displacement accumulated during collision for player and each enemy car
+collision_displacement_accum = {
+    "player": 0.0,
+    "enemies": {id(enemy): 0.0 for enemy in enemy_cars}
+}
+MAX_COLLISION_DISPLACEMENT = 10.0  # max units total move during collision effect
+DISPLACEMENT_PER_FRAME = 0.3       # units moved per update frame
+
+COLLISION_SPEED_BOOST = 1.5   # multiplier for front car
+COLLISION_SPEED_PENALTY = -1.0 # multiplier for rear car
+COLLISION_EFFECT_TIME = 2.0   # seconds
+active_collision_effects = set()
+# Track speed effects
+def apply_collision_response():
+    global enemy_player_collision_flag, enemy_player_collision_start_time, colliding_enemies, car_pos
+    if not enemy_player_collision_flag or not colliding_enemies:
+        return
+    now = time.time()
+    if now - enemy_player_collision_start_time > COLLISION_EFFECT_TIME:
+        enemy_player_collision_flag = False
+        colliding_enemies.clear()
+        active_collision_effects.clear()
+        return
+    # Nudge cars apart so next frame won’t cause repeat collision
+    player_pos = np.array(car_pos[:2])
+    player_angle_rad = math.radians(car_angle)
+    player_forward = np.array([math.cos(player_angle_rad), math.sin(player_angle_rad)])
+    nudge_amt = max(CAR_LENGTH, CAR_WIDTH) + 10  # Large enough to prevent overlap
+    for enemy in colliding_enemies:
+        enemy_pos = np.array(enemy.position[:2])
+        rel_vec = player_pos - enemy_pos
+        if np.linalg.norm(rel_vec) == 0:
+            rel_vec = np.array([1.0, 0.0])  # Arbitrary direction if exactly overlapped
+        rel_vec = rel_vec / np.linalg.norm(rel_vec)
+        sep_vec = rel_vec * nudge_amt
+        # Update positions
+        car_pos[0] += sep_vec[0]
+        car_pos[1] += sep_vec[1]
+        enemy.position[0] -= sep_vec[0]
+        enemy.position[1] -= sep_vec[1]
 
 
 def is_car_colliding():
@@ -844,7 +942,10 @@ def update_car():
     global collision_flag, collision_start_time
     global boost_active, boost_start_time
     global cheat_message
-    global paused
+    global paused , lives 
+    if lives <= 0:
+        
+        return
     if paused:
         return  # Game is paused
     if enemy_win or finish_crossed:
@@ -873,33 +974,55 @@ def update_car():
             car_pos[0] += slow_speed * math.cos(angle_rad)
             car_pos[1] += slow_speed * math.sin(angle_rad)
             if is_car_colliding():
-                
+                print("Collision while reversing → stopping immediately")
                 car_pos = old_pos[:]
                 collision_flag = False
                 current_speed = 0
+                # Decrease life on collision
+                lives = max(0, lives - 1)
+                if lives <= 0:
+                    print("Game Over! No lives remaining.")
+                    # You might want to add game over logic here
         else:
             collision_flag = False
             current_speed = normal_speed
         glutPostRedisplay()
         return
+    check_enemy_player_collision()
+    apply_collision_response()
     check_health_kit_collision()
     check_bomb_collision()
 
+    multiplier = 1.0
+    if "player" in active_collision_effects:
+        m, start_time = active_collision_effects["player"]
+        if time.time() - start_time < COLLISION_EFFECT_TIME:
+            multiplier = m
+        else:
+            del active_collision_effects["player"]
 
-    # --- Normal forward motion ---
+    effective_speed = current_speed * multiplier
+
+        # --- Normal forward motion (with multiplier) ---
     angle_rad = math.radians(car_angle - 90)
-    new_x = car_pos[0] - current_speed * math.cos(angle_rad)
-    new_y = car_pos[1] - current_speed * math.sin(angle_rad)
+    new_x = car_pos[0] - effective_speed * math.cos(angle_rad)
+    new_y = car_pos[1] - effective_speed * math.sin(angle_rad)
+
     old_pos = car_pos[:]
     car_pos[0], car_pos[1] = new_x, new_y
 
+
     # Check collision going forward
     if is_car_colliding():
-        
-        collision_flag = True
-        collision_start_time = now
-        car_pos = old_pos[:]
-        current_speed = 0
+            print("Collision detected! Life lost.")
+            collision_flag = True
+            collision_start_time = now
+            car_pos = old_pos[:]
+            current_speed = 0
+            # Decrease life on collision
+            lives = max(0, lives - 1)
+            
+
     result = has_crossed_finish_line()
     if not finish_crossed:
         if result == "correct":
@@ -913,6 +1036,7 @@ def update_car():
 
     prev_car_pos = car_pos[:]
     glutPostRedisplay()
+
 
 
 def reset_game():
@@ -1030,9 +1154,9 @@ def showScreen():
         draw_enemy_car(ecar.position[0], ecar.position[1], ecar.position[2], ecar.angle)
     if finish_crossed:
         draw_text(400, 400, "Congratulations! You finished the race!")
+    if lives <= 0:
+        draw_text(450, 400, "Game Over! No lives remaining.")
 
-    draw_text(10, 770, "CSE423 Car Game Demo - Extended Road with 90° Turn")
-    draw_text(10, 750, f"Lives: {lives}")
     global kits_spawned
 
     if not kits_spawned:
@@ -1046,7 +1170,8 @@ def showScreen():
         draw_health_kit(hx, hy, 20)
     for (bx, by) in bombs:
         draw_bomb(bx, by, 20)
-
+    draw_life_counter()
+    draw_dashboard()     
     # --- Mini viewport (top-right corner) ---
     mini_width, mini_height = 200, 200
     glViewport(1000 - mini_width - 20, 800 - mini_height - 20, mini_width, mini_height)
@@ -1080,7 +1205,8 @@ def showScreen():
 
 
     # Draw a red dot at car position to make it more visible on minimap
-    glColor3f(1.0, 0.0, 0.0)
+        # Draw a light skyblue dot for the player car
+    glColor3f(0.53, 0.81, 0.98)  # Light skyblue
     dot_size = 50
     glBegin(GL_QUADS)
     glVertex2f(car_pos[0] - dot_size, car_pos[1] - dot_size)
@@ -1088,6 +1214,18 @@ def showScreen():
     glVertex2f(car_pos[0] + dot_size, car_pos[1] + dot_size)
     glVertex2f(car_pos[0] - dot_size, car_pos[1] + dot_size)
     glEnd()
+
+    # Draw red dots for enemy cars
+    glColor3f(1.0, 0.0, 0.0)  # Red
+    for ecar in enemy_cars:
+        ex, ey, _ = ecar.position
+        glBegin(GL_QUADS)
+        glVertex2f(ex - dot_size, ey - dot_size)
+        glVertex2f(ex + dot_size, ey - dot_size)
+        glVertex2f(ex + dot_size, ey + dot_size)
+        glVertex2f(ex - dot_size, ey + dot_size)
+        glEnd()
+
 
     # Restore matrices
     glPopMatrix()
@@ -1099,6 +1237,163 @@ def showScreen():
     glViewport(0, 0, 1000, 800)
 
     glutSwapBuffers()
+
+def draw_dashboard():
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    gluOrtho2D(0, 1000, 0, 800)
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+    
+    # Dashboard background (semi-transparent black panel)
+    glColor4f(0.1, 0.1, 0.1, 0.8)  # Dark gray with transparency
+    glBegin(GL_QUADS)
+    glVertex2f(10, 10)
+    glVertex2f(300, 10)
+    glVertex2f(300, 150)
+    glVertex2f(10, 150)
+    glEnd()
+    
+    # Dashboard border
+    glColor3f(0.5, 0.5, 0.5)
+    glLineWidth(2.0)
+    glBegin(GL_LINE_LOOP)
+    glVertex2f(10, 10)
+    glVertex2f(300, 10)
+    glVertex2f(300, 150)
+    glVertex2f(10, 150)
+    glEnd()
+    
+    # Speed display
+    glColor3f(0.0, 1.0, 1.0)  # Cyan for speed
+    glRasterPos2f(20, 130)
+    speed_text = f"SPEED: {int(current_speed)} km/h"
+    for ch in speed_text:
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
+    
+    # Boost indicator
+    if boost_active:
+        glColor3f(1.0, 0.5, 0.0)  # Orange for active boost
+        boost_text = "BOOST: ACTIVE!"
+    else:
+        glColor3f(0.7, 0.7, 0.7)  # Gray for inactive boost
+        boost_text = "BOOST: READY"
+    glRasterPos2f(20, 105)
+    for ch in boost_text:
+        glutBitmapCharacter(GLUT_BITMAP_9_BY_15, ord(ch))
+    
+    # Lives counter (numeric)
+    glColor3f(1.0, 0.0, 0.0) if lives < 5 else glColor3f(0.0, 1.0, 0.0)
+    glRasterPos2f(20, 80)
+    lives_text = f"LIVES: {lives}/10"
+    for ch in lives_text:
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
+    
+    # Game status
+    if finish_crossed:
+        glColor3f(0.0, 1.0, 0.0)  # Green for victory
+        status_text = "STATUS: FINISHED!"
+    elif enemy_win:
+        glColor3f(1.0, 0.0, 0.0)  # Red for loss
+        status_text = "STATUS: ENEMY WON!"
+    elif paused:
+        glColor3f(1.0, 1.0, 0.0)  # Yellow for paused
+        status_text = "STATUS: PAUSED"
+    else:
+        glColor3f(0.0, 1.0, 1.0)  # Cyan for racing
+        status_text = "STATUS: RACING"
+    
+    glRasterPos2f(20, 55)
+    for ch in status_text:
+        glutBitmapCharacter(GLUT_BITMAP_9_BY_15, ord(ch))
+    
+    # Controls reminder
+    glColor3f(0.7, 0.7, 0.7)
+    glRasterPos2f(20, 30)
+    controls_text = "W/S: Speed  A/D: Turn  R: Reset  P: Pause"
+    for ch in controls_text:
+        glutBitmapCharacter(GLUT_BITMAP_8_BY_13, ord(ch))
+    
+    # Visual life bars (on the right side of dashboard)
+    life_bar_start_x = 200
+    life_bar_start_y = 130
+    life_bar_length = 15
+    life_bar_thickness = 4
+    life_bar_spacing = 2
+    
+    for i in range(10):
+        if i < lives:
+            glColor3f(0.0, 1.0, 0.0) if lives >= 5 else glColor3f(1.0, 0.0, 0.0)
+        else:
+            glColor3f(0.3, 0.3, 0.3)
+        
+        x_pos = life_bar_start_x + (i * (life_bar_length + life_bar_spacing))
+        
+        glBegin(GL_QUADS)
+        glVertex2f(x_pos, life_bar_start_y)
+        glVertex2f(x_pos + life_bar_length, life_bar_start_y)
+        glVertex2f(x_pos + life_bar_length, life_bar_start_y - life_bar_thickness)
+        glVertex2f(x_pos, life_bar_start_y - life_bar_thickness)
+        glEnd()
+    
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+
+def draw_life_counter():
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    gluOrtho2D(0, 1000, 0, 800)  # Match your window coordinates
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+    
+    # Position and size of life counter - MOVED DOWNWARD
+    start_x, start_y = 20, 700  # Changed from 760 to 700 (moved 60 pixels down)
+    line_length = 50
+    line_thickness = 8
+    spacing = 10
+    
+    # Draw life lines
+    for i in range(10):
+        if i < lives:
+            # Green for 5+ lives, red for less than 5 lives
+            if lives >= 5:
+                glColor3f(0.0, 1.0, 0.0)  # Green for good health
+            else:
+                glColor3f(1.0, 0.0, 0.0)  # Red for critical health
+        else:
+            glColor3f(0.3, 0.3, 0.3)  # Gray for lost lives
+            
+        y_pos = start_y - (i * (line_thickness + spacing))
+        
+        glBegin(GL_QUADS)
+        glVertex2f(start_x, y_pos)
+        glVertex2f(start_x + line_length, y_pos)
+        glVertex2f(start_x + line_length, y_pos - line_thickness)
+        glVertex2f(start_x, y_pos - line_thickness)
+        glEnd()
+    
+    # Draw numeric life count BELOW the lines (centered)
+    text_y_position = start_y - (10 * (line_thickness + spacing)) - 15  # Below all lines
+    text_x_position = start_x + (line_length / 2) - 5  # Center the number
+    
+    glColor3f(1, 1, 1)
+    glRasterPos2f(text_x_position, text_y_position)
+    
+    # Convert lives to string and draw each character
+    lives_text = str(lives)
+    for ch in lives_text:
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
+    
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
 
 
 def main():
