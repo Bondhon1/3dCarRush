@@ -25,7 +25,10 @@ boost_speed = 20.0
 slow_speed = 10.0
 
 current_speed = normal_speed
-
+bullets = []  # list of active bullets (x, y, z, angle)
+gun_angle = 0.0
+gun_turn_speed = 5.0   # degrees per key press
+bullet_speed = 30.0    # speed of bullet units/frame
 
 turn_speed = 3        # degrees per press
 CAR_LENGTH = 15 * 2.5
@@ -40,7 +43,10 @@ COLLISION_PUSH_SPEED = 0.5   # constant displacement per frame
 
 boost_active = False
 boost_start_time = 0
-
+shield_active = False
+shield_start_time = 0
+shield_kits = []  # [(x,y), (x,y), ...]
+num_shield_kits = 3  # number of shield kits to spawn
 # At the top
 finish_line_pos = None
 finish_line_angle = 0
@@ -57,6 +63,7 @@ BORDER_HEIGHT = 30.0
 BORDER_THICKNESS = 12.0
 
 bombs = []
+explosions = []  # each entry: {'pos': (x, y), 'start_time': time}
 # --- NEW GLOBALS ---
 health_kits = []   # [(x,y), (x,y), ...]
 kit_size = 20      # size of the 3D plus
@@ -148,7 +155,7 @@ def draw_bomb(x, y, size=20, height=30):
                    y + size * 0.6 + math.sin(rad) * (size * 0.4))
     glEnd()
 def check_bomb_collision():
-    global bombs, lives
+    global bombs, lives, explosions
     car_x, car_y = car_pos[0], car_pos[1]
     bomb_hit = None
     for (bx, by) in bombs:
@@ -159,6 +166,131 @@ def check_bomb_collision():
             break
     if bomb_hit:
         bombs.remove(bomb_hit)
+        # Add explosion at bomb location with current time
+        explosions.append({'pos': bomb_hit, 'start_time': time.time()})
+
+def draw_simple_cone(x, y, scale, segments=30, height=20, base_radius=10):
+    glPushMatrix()
+    glTranslatef(x, y, 0)
+    glRotatef(90, 1, 0, 0)  # rotate cone to point upwards along +Y axis
+    glScalef(scale, scale, scale)
+    
+    # Draw cone surface with vertical red to yellow gradient
+    glBegin(GL_TRIANGLE_FAN)
+    # Tip vertex (yellow)
+    glColor3f(1.0, 1.0, 0.0)  # yellow at apex
+    glVertex3f(0, height, 0)
+    
+    # Base circle vertices (red)
+    glColor3f(1.0, 0.0, 0.0)  # red at base
+    for i in range(segments + 1):
+        angle = 2 * math.pi * i / segments
+        x_pos = base_radius * math.cos(angle)
+        z_pos = base_radius * math.sin(angle)
+        glVertex3f(x_pos, 0, z_pos)
+    glEnd()
+    
+    glPopMatrix()
+
+def draw_all_explosions():
+    global explosions
+    current_time = time.time()
+    active_explosions = []
+    for exp in explosions:
+        elapsed = current_time - exp['start_time']
+        if elapsed < 1.0:
+            scale = 0.3 + 1.2 * (elapsed / 1.0)  # grow scale from 0.3 to 1.5
+            draw_simple_cone(exp['pos'][0], exp['pos'][1], scale)
+            active_explosions.append(exp)
+    explosions = active_explosions
+
+def spawn_shield_kits():
+    global shield_kits
+    road_list = list(road_positions)
+    random.shuffle(road_list)
+    shield_kits = road_list[:num_shield_kits]
+
+def draw_shield_kit(x, y, z=20):
+    glPushMatrix()
+    glTranslatef(x, y, z)
+    glColor3f(0.0, 0.8, 1.0)  # cyan color for shield kit
+    
+    size = 30
+    half_size = size / 2
+    depth = size / 2  # depth for 3D effect
+
+    # Draw diamond by combining two pyramids (top and bottom)
+    # Top pyramid (pointing up)
+    glBegin(GL_TRIANGLES)
+    # Front face
+    glVertex3f(0, half_size, 0)           # top point
+    glVertex3f(-half_size, 0, depth)      # front-left
+    glVertex3f(half_size, 0, depth)       # front-right
+    
+    # Right face
+    glVertex3f(0, half_size, 0)
+    glVertex3f(half_size, 0, depth)
+    glVertex3f(half_size, 0, -depth)
+    
+    # Back face
+    glVertex3f(0, half_size, 0)
+    glVertex3f(half_size, 0, -depth)
+    glVertex3f(-half_size, 0, -depth)
+    
+    # Left face
+    glVertex3f(0, half_size, 0)
+    glVertex3f(-half_size, 0, -depth)
+    glVertex3f(-half_size, 0, depth)
+    glEnd()
+
+    # Bottom pyramid (pointing down)
+    glBegin(GL_TRIANGLES)
+    # Front face
+    glVertex3f(0, -half_size, 0)          # bottom point
+    glVertex3f(-half_size, 0, depth)      # front-left
+    glVertex3f(half_size, 0, depth)       # front-right
+
+    # Right face
+    glVertex3f(0, -half_size, 0)
+    glVertex3f(half_size, 0, depth)
+    glVertex3f(half_size, 0, -depth)
+
+    # Back face
+    glVertex3f(0, -half_size, 0)
+    glVertex3f(half_size, 0, -depth)
+    glVertex3f(-half_size, 0, -depth)
+
+    # Left face
+    glVertex3f(0, -half_size, 0)
+    glVertex3f(-half_size, 0, -depth)
+    glVertex3f(-half_size, 0, depth)
+    glEnd()
+
+    # Middle square or diamond-shaped cross section for seam
+    glBegin(GL_QUADS)
+    glVertex3f(-half_size, 0, depth)
+    glVertex3f(half_size, 0, depth)
+    glVertex3f(half_size, 0, -depth)
+    glVertex3f(-half_size, 0, -depth)
+    glEnd()
+
+    glPopMatrix()
+
+
+def check_shield_kit_collision():
+    global shield_kits, shield_active, shield_start_time
+    cx, cy, cz = car_pos
+    collected = []
+    for (sx, sy) in shield_kits:
+        dist = math.sqrt((cx - sx)**2 + (cy - sy)**2)
+        if dist < 60:  # pickup radius
+            if not shield_active:
+                shield_active = True
+                shield_start_time = time.time()
+                print("Shield activated for 5 seconds!")
+            collected.append((sx, sy))
+    # Remove collected kits
+    shield_kits = [pos for pos in shield_kits if pos not in collected]
 
 def add_rectangle_to_set(xmin, xmax, ymin, ymax, store, dx=12, dy=12):
     for x in range(int(xmin), int(xmax)+1, dx):
@@ -537,46 +669,59 @@ def draw_cylinder(radius, height, slices=20):
     gluDeleteQuadric(quad)
 
 
+# Adjust the gun size in draw_player_car function
 def draw_player_car(x=0, y=0, z=30, car_angle=0, gun_angle=0):
-    scale_factor = 15  # Increase size by 1.5x
+    scale_factor = 15
 
     glPushMatrix()
     glTranslatef(x, y, z)
-    glRotatef(car_angle-90, 0, 0, 1)
+    glRotatef(car_angle - 90, 0, 0, 1)
 
     # Main body - lighter blue
     glPushMatrix()
     glScalef(2.5 * scale_factor, 1.2 * scale_factor, 0.6 * scale_factor)
-    glColor3f(0.4, 0.5, 0.9)  # Light sky blue
+    glColor3f(0.4, 0.5, 0.9)
     draw_cube(1.0)
     glPopMatrix()
 
-    # Cabin - light grey
+    # Cabin
     glPushMatrix()
     glTranslatef(0.0, 0.0, 0.65 * scale_factor)
     glScalef(1.2 * scale_factor, 0.9 * scale_factor, 0.55 * scale_factor)
-    glColor3f(0.0, 0.85, 0.9)  # Light grey-blue
+    glColor3f(0.0, 0.85, 0.9)
     draw_cube(1.0)
     glPopMatrix()
 
-    # Gun mount platform - pale yellow
+    # Gun mount platform (make it bigger)
     glPushMatrix()
-    glTranslatef(0.6 * scale_factor, 0.0, 1.1 * scale_factor)
-    glScalef(0.5 * scale_factor, 0.5 * scale_factor, 0.1 * scale_factor)
-    glColor3f(0.5, 0.2, 0.5)  # Pale yellow
+    glTranslatef(0.8 * scale_factor, 0.0, 1.1 * scale_factor)  # Moved further forward
+    glScalef(0.7 * scale_factor, 0.7 * scale_factor, 0.15 * scale_factor)  # Larger platform
+    glColor3f(0.5, 0.2, 0.5)
     draw_cube(1.0)
     glPopMatrix()
 
-    # Gun barrel - light silver
+    # Gun barrel (bigger and longer)
     glPushMatrix()
-    glTranslatef(0.6 * scale_factor, 0.0, 1.2 * scale_factor)
+    # rotate around car center by gun_angle (so gun swivels on the turret)
     glRotatef(gun_angle, 0, 0, 1)
+    # then translate OUT to the gun mount position
+    glTranslatef(0.6 * scale_factor, 0.0, 1.2 * scale_factor)  # Adjusted position
+    
+    # Draw gun base (wider)
+    glPushMatrix()
+    glTranslatef(-6, 0, -0.2 * scale_factor)
+    glScalef(0.4 * scale_factor, 0.5 * scale_factor, 0.4 * scale_factor)
+    glColor3f(0.3, 0.3, 0.3)
+    draw_cube(1.0)
+    glPopMatrix()
+    
+    # align cylinder axis
     glRotatef(90, 0, 1, 0)
-    glColor3f(0.2, 0.2, 0.2)  # Light silver
-    draw_cylinder(0.1 * scale_factor, 1.0 * scale_factor)
+    glColor3f(0.2, 0.2, 0.2)
+    draw_cylinder(0.15 * scale_factor, 1.5 * scale_factor)  # Bigger and longer barrel
     glPopMatrix()
 
-    # Wheels - black cylinders
+    # Wheels
     wheel_positions = [(-1.4 * scale_factor, 1.3 * scale_factor, 0.0),
                        (-1.4 * scale_factor, -1.3 * scale_factor, 0.0),
                        (1.4 * scale_factor, 1.3 * scale_factor, 0.0),
@@ -585,11 +730,66 @@ def draw_player_car(x=0, y=0, z=30, car_angle=0, gun_angle=0):
         glPushMatrix()
         glTranslatef(wx, wy, wz)
         glRotatef(90, 1, 0, 0)
-        glColor3f(0.05, 0.05, 0.05)  # Near black tires
+        glColor3f(0.05, 0.05, 0.05)
         draw_cylinder(0.3 * scale_factor, 0.2 * scale_factor)
         glPopMatrix()
 
     glPopMatrix()
+# === Bullet drawing/updating ===
+def draw_bullets():
+    for bx, by, bz, angle in bullets:
+        glPushMatrix()
+        glTranslatef(bx, by, bz)
+        glColor3f(1.0, 0.0, 0.0)  # red bullets
+        glutSolidSphere(3, 10, 10)
+        glPopMatrix()
+
+
+def update_bullets():
+    global bullets, active_collision_effects
+    new_bullets = []
+    hit_radius = 50  # tune based on car size
+
+    for bx, by, bz, angle in bullets:
+        # Move bullet forward in XY plane
+        bx += bullet_speed * math.cos(math.radians(angle - 90))
+        by += bullet_speed * math.sin(math.radians(angle - 90))
+        bz = 30  # fixed height
+
+        # --- Check collision with enemies ---
+        hit_enemy = None
+        for car in enemy_cars:
+            ex, ey, _ = car.position  # ignore z
+            dist = math.hypot(bx - ex, by - ey)  # 2D distance
+            if dist < hit_radius:
+                hit_enemy = car
+                break
+
+        if hit_enemy:
+            # Apply slow effect for this enemy
+            active_collision_effects.add((id(hit_enemy), time.time()))
+            hit_enemy.lives -= 1
+            print(f"Enemy hit! Lives left: {hit_enemy.lives}")
+            continue  # bullet vanishes on hit
+
+        # --- Keep bullet if in bounds ---
+        if -70000 < bx < 70000 and -70000 < by < 70000:
+            new_bullets.append((bx, by, bz, angle))
+
+    bullets = new_bullets
+
+
+
+
+# === Shooting function ===
+def fire_bullet():
+    global bullets, collision_flag
+    if not collision_flag:
+        bx, by, bz = car_pos[0], car_pos[1], 30
+        # Combine car_angle and gun_angle for absolute bullet direction
+        bullet_angle = (car_angle + gun_angle) % 360
+        bullets.append((bx, by, bz, bullet_angle))
+
 
 # --- Enemy cars ---
 class EnemyCar:
@@ -720,8 +920,10 @@ def enemy_crossed_finish_area(car):
 
 # At initialization, set car.angle = math.atan2(start_dy, start_dx)
 
+COLLISION_EFFECT_TIME = 5  # seconds
+
 def update_enemy_cars():
-    global enemy_win, finish_crossed
+    global enemy_win, finish_crossed, active_collision_effects
     for car in enemy_cars:
         if car.finished:
             car.position = list(car.path_points[-1])
@@ -732,16 +934,15 @@ def update_enemy_cars():
             continue
 
         if enemy_crossed_finish_area(car):
-            
             car.finished = True
             if not finish_crossed and not enemy_win:
                 enemy_win = True
             car.position = list(car.path_points[-1])
             continue
 
-
         if car.segment >= len(car.path_points) - 1:
             continue
+
         curr = car.position
         goal = car.path_points[car.segment + 1]
         dx, dy = goal[0] - curr[0], goal[1] - curr[1]
@@ -760,7 +961,7 @@ def update_enemy_cars():
             current_angle_rad += turn_rate_rad if angle_diff > 0 else -turn_rate_rad
         car.angle = math.degrees(current_angle_rad)
 
-                # Compute projection to limit side drift
+        # Compute projection to limit side drift
         to_goal = np.array([dx, dy]) / dist
         car_heading = np.array([math.cos(current_angle_rad), math.sin(current_angle_rad)])
         proj_length = np.dot(car_heading, to_goal)
@@ -773,10 +974,12 @@ def update_enemy_cars():
             if time.time() - start_time < COLLISION_EFFECT_TIME:
                 multiplier = m
             else:
+                # Restore to normal speed after 5 seconds
                 del active_collision_effects[key]
 
+        # Movement update
         if proj_length < 0:
-            move_x, move_y = 0.0, 0.0  # Prevent backward movement here
+            move_x, move_y = 0.0, 0.0  # Prevent backward movement
         else:
             effective_speed = car.speed * proj_length * multiplier
             move_x = effective_speed * car_heading[0]
@@ -785,58 +988,57 @@ def update_enemy_cars():
         # Update position
         car.position[0] += move_x
         car.position[1] += move_y
-        multiplier = 1.0
-        if "enemy" in active_collision_effects:
-            m, start_time = active_collision_effects["enemy"]
-            if time.time() - start_time < COLLISION_EFFECT_TIME:
-                multiplier = m
-            else:
-                del active_collision_effects["enemy"]
 
-      
-
-        
-        # Waypoint arrival update (with print)
+        # Waypoint arrival update
         new_dx, new_dy = goal[0] - car.position[0], goal[1] - car.position[1]
         new_dist = math.hypot(new_dx, new_dy)
         if new_dist < car.speed:
             car.position = list(goal)
             car.segment += 1
-            
-            if car.segment == len(car.path_points) - 1:
-                # Wait for the finish line crossing logic above to set finished
-                pass
+
+
+
 colliding_enemies = set()
-def check_collision(player_pos, enemy_pos, car_length, car_width, tolerance=0):
-    # Compute half sizes plus optional tolerance for "forgiving" edge
+def check_collision(player_pos, player_angle_deg, enemy_pos, car_length, car_width, tolerance=0):
     half_len = car_length / 2 + tolerance
     half_wid = car_width / 2 + tolerance
 
     px, py = player_pos
     ex, ey = enemy_pos
 
-    # Collision: rectangles touch or overlap in x and y
-    if (abs(px - ex) <= 2 * half_len) and (abs(py - ey) <= 2 * half_wid):
+    # Convert angle to radians
+    theta = math.radians(player_angle_deg)
+
+    # Relative position vector from player to enemy
+    dx = ex - px
+    dy = ey - py
+
+    # Rotate relative vector by -theta to align with player car axes
+    rotated_x = dx * math.cos(-theta) - dy * math.sin(-theta)
+    rotated_y = dx * math.sin(-theta) + dy * math.cos(-theta)
+
+    # Check overlap in rotated frame
+    if abs(rotated_x) <= 2 * half_len and abs(rotated_y) <= 2 * half_wid:
         return True
     return False
 
-
 def check_enemy_player_collision():
-    global enemy_player_collision_flag, enemy_player_collision_start_time, colliding_enemies, lives
+    global enemy_player_collision_flag, enemy_player_collision_start_time, colliding_enemies, lives, shield_active
     colliding_enemies.clear()
     player_pos = car_pos[:2]
+    player_angle = car_angle
     collision = False
     for enemy in enemy_cars:
         enemy_pos = enemy.position[:2]
-        if check_collision(player_pos, enemy_pos, CAR_LENGTH, CAR_WIDTH, tolerance=5):
+        if check_collision(player_pos, player_angle, enemy_pos, CAR_LENGTH, CAR_WIDTH, tolerance=5):
             collision = True
             colliding_enemies.add(enemy)
-    # Only trigger a collision event if not already active
     if collision and not enemy_player_collision_flag:
         enemy_player_collision_flag = True
         print('Collision detected!')
         enemy_player_collision_start_time = time.time()
-        lives -= 1
+        if not shield_active:
+            lives -= 1
         return True
     return False
 
@@ -908,6 +1110,7 @@ def is_car_colliding():
                 for dy in [-8, 0, 8]:
                     pt = (grid_x + dx, grid_y + dy)
                     if pt in border_positions:
+                        explosions.append({'pos': pt, 'start_time': time.time()})
                         return True
     return False
 
@@ -939,12 +1142,18 @@ def has_crossed_finish_line():
 
 def update_car():
     global car_pos, car_angle, current_speed, prev_car_pos, finish_crossed, enemy_win
-    global collision_flag, collision_start_time
+    global collision_flag, collision_start_time, active_collision_effects
     global boost_active, boost_start_time
     global cheat_message
-    global paused ,lives
+    global paused , lives 
+    global shield_active, shield_start_time  # Add shield variables
+    if lives <= 0:
+        
+        return
     if paused:
         return  # Game is paused
+    if shield_active and (time.time() - shield_start_time) >= 5:
+        shield_active = False
     if enemy_win or finish_crossed:
         current_speed = 0
         glutPostRedisplay()
@@ -976,17 +1185,20 @@ def update_car():
                 collision_flag = False
                 current_speed = 0
                 # Decrease life on collision
-                lives = max(0, lives - 1)
-                if lives <= 0:
-                    print("Game Over! No lives remaining.")
-                    # You might want to add game over logic here
+                if not shield_active:
+                    lives = max(0, lives - 1)
+
         else:
             collision_flag = False
             current_speed = normal_speed
         glutPostRedisplay()
         return
+    check_enemy_player_collision()
+    apply_collision_response()
     check_health_kit_collision()
     check_bomb_collision()
+    check_shield_kit_collision()
+    update_bullets()
 
     multiplier = 1.0
     if "player" in active_collision_effects:
@@ -1009,16 +1221,15 @@ def update_car():
 
     # Check collision going forward
     if is_car_colliding():
-        
             print("Collision detected! Life lost.")
             collision_flag = True
             collision_start_time = now
             car_pos = old_pos[:]
             current_speed = 0
             # Decrease life on collision
-            lives = max(0, lives - 1)
-            if lives <= 0:
-                print("Game Over! No lives remaining.")
+            if not shield_active:
+                lives = max(0, lives - 1)
+
     result = has_crossed_finish_line()
     if not finish_crossed:
         if result == "correct":
@@ -1056,12 +1267,12 @@ def reset_game():
             ecar.angle = 0
         ecar.finished = False
     enemy_win = False
-
+    spawn_shield_kits()
     glutPostRedisplay()
-
 
 def keyboard(key, x, y):
     global current_speed, car_angle, boost_active, boost_start_time, paused
+    global shield_active, shield_start_time  # Add shield variables
     key_lower = key.lower()
     
     if key_lower == b'p':  # Pause/resume
@@ -1078,39 +1289,27 @@ def keyboard(key, x, y):
         car_angle += turn_speed
     elif key_lower == b'd':  # turn right
         car_angle -= turn_speed
+  
 
 
 
+# === Controls ===
 def special_keyboard(key, x, y):
-    global current_speed, car_angle, boost_active, boost_start_time
-
-   
+    global current_speed, car_angle, boost_active, boost_start_time, gun_angle
 
     if key == GLUT_KEY_UP and not collision_flag:
-        boost_active = True
-        boost_start_time = time.time()
-        current_speed = boost_speed
-    elif key == GLUT_KEY_DOWN and not collision_flag:
-        current_speed = slow_speed
+        fire_bullet()  # UP arrow fires bullet
+    
     elif key == GLUT_KEY_LEFT:
-        car_angle += turn_speed
+        gun_angle += gun_turn_speed  # rotate gun left
+       
     elif key == GLUT_KEY_RIGHT:
-        car_angle -= turn_speed
+        gun_angle -= gun_turn_speed  # rotate gun right
+
 
 def mouse_click(button, state, x, y):
     if button == GLUT_LEFT_BUTTON and state == GLUT_DOWN:
-        # Convert window x, y to OpenGL world coordinates
-        viewport = glGetIntegerv(GL_VIEWPORT)
-        modelview = glGetDoublev(GL_MODELVIEW_MATRIX)
-        projection = glGetDoublev(GL_PROJECTION_MATRIX)
-        winX = x
-        winY = viewport[3] - y  # OpenGL's y=0 is at the bottom
-        # Read z from depth buffer at x, y
-        winZ = glReadPixels(winX, winY, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT)
-        world_x, world_y, world_z = gluUnProject(winX, winY, winZ, modelview, projection, viewport)
-        print(f"Clicked position: x={world_x:.1f}, y={world_y:.1f}, z=10")
-        # z=10 by convention; you can use world_z for exact value if needed
-
+        fire_bullet()
 
 def setupCamera():
     glMatrixMode(GL_PROJECTION)
@@ -1137,22 +1336,23 @@ def showScreen():
     glViewport(0, 0, 1000, 800)
     setupCamera()
     draw_road()
+    draw_bullets()
     if finish_line_pos:
         draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle)
     if cheat_message:
         draw_text(300, 360, cheat_message)
     if enemy_win:
-        draw_text(350, 400, "Game Over! Enemy finished first.")
+        draw_text(350, 450, "Game Over! Enemy finished first.")
 
 
-    draw_player_car(car_pos[0], car_pos[1], car_pos[2], car_angle, 0)
+    draw_player_car(car_pos[0], car_pos[1], car_pos[2], car_angle, gun_angle)
     for ecar in enemy_cars:
         draw_enemy_car(ecar.position[0], ecar.position[1], ecar.position[2], ecar.angle)
     if finish_crossed:
         draw_text(400, 400, "Congratulations! You finished the race!")
+    if lives <= 0:
+        draw_text(450, 400, "Game Over! No lives remaining.")
 
-   
-    draw_text(10, 750, f"Lives: {lives}")
     global kits_spawned
 
     if not kits_spawned:
@@ -1166,9 +1366,11 @@ def showScreen():
         draw_health_kit(hx, hy, 20)
     for (bx, by) in bombs:
         draw_bomb(bx, by, 20)
-    draw_life_counter()   
-    # Draw the comprehensive dashboard (replaces individual text elements)
-    draw_dashboard()    
+    for (sx, sy) in shield_kits:
+        draw_shield_kit(sx, sy, 20)
+    draw_all_explosions()
+    
+    draw_dashboard()     
     # --- Mini viewport (top-right corner) ---
     mini_width, mini_height = 200, 200
     glViewport(1000 - mini_width - 20, 800 - mini_height - 20, mini_width, mini_height)
@@ -1195,7 +1397,7 @@ def showScreen():
     if finish_line_pos:
         draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle)
 
-    draw_player_car(car_pos[0], car_pos[1], car_pos[2], car_angle, 0)
+    draw_player_car(car_pos[0], car_pos[1], car_pos[2], car_angle, gun_angle)
     # Draw all enemy cars (main view)
     for ecar in enemy_cars:
         draw_enemy_car(ecar.position[0], ecar.position[1], ecar.position[2], ecar.angle)
@@ -1235,171 +1437,164 @@ def showScreen():
 
     glutSwapBuffers()
 
-def draw_life_counter():
-    glMatrixMode(GL_PROJECTION)
-    glPushMatrix()
-    glLoadIdentity()
-    gluOrtho2D(0, 1000, 0, 800)  # Match your window coordinates
-    glMatrixMode(GL_MODELVIEW)
-    glPushMatrix()
-    glLoadIdentity()
-    
-    # Position and size of life counter - MOVED DOWNWARD
-    start_x, start_y = 20, 700  # Changed from 760 to 700 (moved 60 pixels down)
-    line_length = 50
-    line_thickness = 8
-    spacing = 10
-    
-    # Draw life lines
-    for i in range(10):
-        if i < lives:
-            # Green for 5+ lives, red for less than 5 lives
-            if lives >= 5:
-                glColor3f(0.0, 1.0, 0.0)  # Green for good health
-            else:
-                glColor3f(1.0, 0.0, 0.0)  # Red for critical health
-        else:
-            glColor3f(0.3, 0.3, 0.3)  # Gray for lost lives
-            
-        y_pos = start_y - (i * (line_thickness + spacing))
-        
-        glBegin(GL_QUADS)
-        glVertex2f(start_x, y_pos)
-        glVertex2f(start_x + line_length, y_pos)
-        glVertex2f(start_x + line_length, y_pos - line_thickness)
-        glVertex2f(start_x, y_pos - line_thickness)
-        glEnd()
-    
-    # Draw numeric life count BELOW the lines (centered)
-    text_y_position = start_y - (10 * (line_thickness + spacing)) - 15  # Below all lines
-    text_x_position = start_x + (line_length / 2) - 5  # Center the number
-    
-    glColor3f(1, 1, 1)
-    glRasterPos2f(text_x_position, text_y_position)
-    
-    # Convert lives to string and draw each character
-    lives_text = str(lives)
-    for ch in lives_text:
-        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
-    
-    glPopMatrix()
-    glMatrixMode(GL_PROJECTION)
-    glPopMatrix()
-    glMatrixMode(GL_MODELVIEW)
-
 def draw_dashboard():
     glMatrixMode(GL_PROJECTION)
     glPushMatrix()
     glLoadIdentity()
-    gluOrtho2D(0, 1000, 0, 800)
+    gluOrtho2D(0, 1000, 0, 700)
     glMatrixMode(GL_MODELVIEW)
     glPushMatrix()
     glLoadIdentity()
     
-    # Dashboard background (semi-transparent black panel)
-    glColor4f(0.1, 0.1, 0.1, 0.8)  # Dark gray with transparency
+    # === Panel geometry ===
+    x0, y0 = 10, 10
+    x1, y1 = 480, 230   # wider to fit text & bars comfortably
+    
+    # Background
+    glColor4f(0.1, 0.1, 0.1, 0.8)
     glBegin(GL_QUADS)
-    glVertex2f(10, 10)
-    glVertex2f(300, 10)
-    glVertex2f(300, 150)
-    glVertex2f(10, 150)
+    glVertex2f(x0, y0)
+    glVertex2f(x1, y0)
+    glVertex2f(x1, y1)
+    glVertex2f(x0, y1)
     glEnd()
     
-    # Dashboard border
+    # Border (manual)
     glColor3f(0.5, 0.5, 0.5)
     glLineWidth(2.0)
-    glBegin(GL_LINE_LOOP)
-    glVertex2f(10, 10)
-    glVertex2f(300, 10)
-    glVertex2f(300, 150)
-    glVertex2f(10, 150)
+    glBegin(GL_LINES)
+    glVertex2f(x0, y0); glVertex2f(x1, y0)
+    glVertex2f(x1, y0); glVertex2f(x1, y1)
+    glVertex2f(x1, y1); glVertex2f(x0, y1)
+    glVertex2f(x0, y1); glVertex2f(x0, y0)
     glEnd()
     
-    # Speed display
-    glColor3f(0.0, 1.0, 1.0)  # Cyan for speed
-    glRasterPos2f(20, 130)
-    speed_text = f"SPEED: {int(current_speed)} km/h"
-    for ch in speed_text:
+    # === Text (top area of panel) ===
+    glColor3f(0.0, 1.0, 1.0)
+    glRasterPos2f(x0 + 10, y1 - 25)
+    for ch in f"SPEED: {int(current_speed)} km/h":
         glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
-    
-    # Boost indicator
+
     if boost_active:
-        glColor3f(1.0, 0.5, 0.0)  # Orange for active boost
+        glColor3f(1.0, 0.5, 0.0)
         boost_text = "BOOST: ACTIVE!"
     else:
-        glColor3f(0.7, 0.7, 0.7)  # Gray for inactive boost
+        glColor3f(0.7, 0.7, 0.7)
         boost_text = "BOOST: READY"
-    glRasterPos2f(20, 105)
+    glRasterPos2f(x0 + 10, y1 - 50)
     for ch in boost_text:
         glutBitmapCharacter(GLUT_BITMAP_9_BY_15, ord(ch))
     
-    # Lives counter (numeric)
-    glColor3f(1.0, 0.0, 0.0) if lives < 5 else glColor3f(0.0, 1.0, 0.0)
-    glRasterPos2f(20, 80)
-    lives_text = f"LIVES: {lives}/10"
-    for ch in lives_text:
-        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
-    
-    # Game status
-    if finish_crossed:
-        glColor3f(0.0, 1.0, 0.0)  # Green for victory
-        status_text = "STATUS: FINISHED!"
-    elif enemy_win:
-        glColor3f(1.0, 0.0, 0.0)  # Red for loss
-        status_text = "STATUS: ENEMY WON!"
-    elif paused:
-        glColor3f(1.0, 1.0, 0.0)  # Yellow for paused
-        status_text = "STATUS: PAUSED"
+    # Player lives text
+    if lives < 5:
+        glColor3f(1.0, 0.0, 0.0)
     else:
-        glColor3f(0.0, 1.0, 1.0)  # Cyan for racing
-        status_text = "STATUS: RACING"
-    
-    glRasterPos2f(20, 55)
-    for ch in status_text:
-        glutBitmapCharacter(GLUT_BITMAP_9_BY_15, ord(ch))
-    
-    # Controls reminder
-    glColor3f(0.7, 0.7, 0.7)
-    glRasterPos2f(20, 30)
-    controls_text = "W/S: Speed  A/D: Turn  R: Reset  P: Pause"
-    for ch in controls_text:
-        glutBitmapCharacter(GLUT_BITMAP_8_BY_13, ord(ch))
-    
-    # Visual life bars (on the right side of dashboard)
-    life_bar_start_x = 200
-    life_bar_start_y = 130
-    life_bar_length = 15
-    life_bar_thickness = 4
-    life_bar_spacing = 2
-    
+        glColor3f(0.0, 1.0, 0.0)
+    glRasterPos2f(x0 + 10, y1 - 75)
+    for ch in f"LIVES: {lives}/10":
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
+    # === Life bars (moved to bottom inside panel) ===
+    life_bar_start_x = x0 + 200
+    player_bar_y = y1 - 75            # player bars near panel bottom
+    life_bar_length = 18
+    life_bar_thickness = 5
+    life_bar_spacing = 3
+
+    # Player life bars (10 slots)
     for i in range(10):
         if i < lives:
-            glColor3f(0.0, 1.0, 0.0) if lives >= 5 else glColor3f(1.0, 0.0, 0.0)
+            # green when healthy, red when low
+            if lives >= 5:
+                glColor3f(0.0, 1.0, 0.0)
+            else:
+                glColor3f(1.0, 0.0, 0.0)
         else:
             glColor3f(0.3, 0.3, 0.3)
         
         x_pos = life_bar_start_x + (i * (life_bar_length + life_bar_spacing))
-        
+        y_pos = player_bar_y
         glBegin(GL_QUADS)
-        glVertex2f(x_pos, life_bar_start_y)
-        glVertex2f(x_pos + life_bar_length, life_bar_start_y)
-        glVertex2f(x_pos + life_bar_length, life_bar_start_y - life_bar_thickness)
-        glVertex2f(x_pos, life_bar_start_y - life_bar_thickness)
+        glVertex2f(x_pos, y_pos)
+        glVertex2f(x_pos + life_bar_length, y_pos)
+        glVertex2f(x_pos + life_bar_length, y_pos - life_bar_thickness)
+        glVertex2f(x_pos, y_pos - life_bar_thickness)
         glEnd()
+
+    # Status & shield & controls
+    if finish_crossed:
+        glColor3f(0.0, 1.0, 0.0); status_text = "STATUS: FINISHED!"
+    elif enemy_win:
+        glColor3f(1.0, 0.0, 0.0); status_text = "STATUS: ENEMY WON!"
+    elif paused:
+        glColor3f(1.0, 1.0, 0.0); status_text = "STATUS: PAUSED"
+    else:
+        glColor3f(0.0, 1.0, 1.0); status_text = "STATUS: RACING"
+    glRasterPos2f(x0 + 10, y1 - 100)
+    for ch in status_text:
+        glutBitmapCharacter(GLUT_BITMAP_9_BY_15, ord(ch))
+
+    if shield_active:
+        glColor3f(0.0, 0.5, 1.0); shield_text = "SHIELD: ACTIVE!"
+    else:
+        glColor3f(0.7, 0.7, 0.7); shield_text = "SHIELD: OFF"
+    glRasterPos2f(x0 + 10, y1 - 125)
+    for ch in shield_text:
+        glutBitmapCharacter(GLUT_BITMAP_9_BY_15, ord(ch))
+
+    glColor3f(0.7, 0.7, 0.7)
+    glRasterPos2f(x0 + 10, y1 - 150)
+    controls_text = "W/S: Speed  A/D: Turn  R: Reset  P: Pause"
+    for ch in controls_text:
+        glutBitmapCharacter(GLUT_BITMAP_8_BY_13, ord(ch))
     
+    life_bar_start_x = x0 + 200
+    player_bar_y = y0 + 20            # player bars near panel bottom
+    life_bar_length = 18
+    life_bar_thickness = 5
+    life_bar_spacing = 3
+    
+    # === Enemy lives rows (below the player text, just above player bars) ===
+    enemy_max_lives = 4
+    enemy_row_start_y = player_bar_y + 16  # slightly above player bars
+
+    for idx, car in enumerate(enemy_cars):
+        # label (E1, E2, ...)
+        label = f"E{idx+1}:"
+        glColor3f(1.0, 1.0, 1.0)
+        glRasterPos2f(x0 + 10, enemy_row_start_y + idx * (life_bar_thickness + 6) - 2)
+        for ch in label:
+            glutBitmapCharacter(GLUT_BITMAP_9_BY_15, ord(ch))
+        
+        # clamp displayed lives so row length = enemy_max_lives
+        displayed_lives = max(0, min(car.lives, enemy_max_lives))
+        
+        for i in range(enemy_max_lives):
+            if i < displayed_lives:
+                glColor3f(1.0, 0.0, 0.0)   # enemy bars red
+            else:
+                glColor3f(0.3, 0.3, 0.3)
+            
+            x_pos = life_bar_start_x + (i * (life_bar_length + life_bar_spacing))
+            y_pos = enemy_row_start_y + idx * (life_bar_thickness + 6)
+            glBegin(GL_QUADS)
+            glVertex2f(x_pos, y_pos)
+            glVertex2f(x_pos + life_bar_length, y_pos)
+            glVertex2f(x_pos + life_bar_length, y_pos - life_bar_thickness)
+            glVertex2f(x_pos, y_pos - life_bar_thickness)
+            glEnd()
+
     glPopMatrix()
     glMatrixMode(GL_PROJECTION)
     glPopMatrix()
     glMatrixMode(GL_MODELVIEW)
 
-# Remove the old draw_life_counter function and replace it with this dashboard
-# Also remove the individual text drawing calls from showScreen and replace with this
+
 def main():
     glutInit(sys.argv)
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH)
     glutInitWindowSize(1000, 800)
     glutInitWindowPosition(0, 0)
-    glutCreateWindow(b"Car Game: Extended Road with Curve")
+    glutCreateWindow(b"3dCarRush")
     glutSpecialFunc(special_keyboard)
     glutKeyboardFunc(keyboard)
     glClearColor(0.0, 0.4, 0.0, 1.0)
@@ -1409,16 +1604,16 @@ def main():
     global selected_layout
     layouts = [layout1, layout2, layout3]
     selected_layout = random.choice(layouts)
-    print(selected_layout.__name__)
+
     layout_index = layouts.index(selected_layout) + 1
-    # finish_line_pos is set by layout function after draw_road()
-    # So, call selected_layout to set finish_line_pos
+  
     selected_layout()
     paths = get_enemy_paths_for_layout(layout_index)
-    enemy_speeds = [random.uniform(12, 18) for _ in range(ENEMY_COUNT)]  # Each enemy has different speed
+    enemy_speeds = [random.uniform(12, 18) for i in range(ENEMY_COUNT)]  # Each enemy has different speed
     global enemy_cars
     enemy_cars = [EnemyCar((0.9, 0.3, 0.3), path, speed) for path, speed in zip(paths, enemy_speeds)]
     spawn_health_kits()
+    spawn_shield_kits()
     glutMainLoop()
 
 if __name__ == "__main__":
