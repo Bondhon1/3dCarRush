@@ -942,10 +942,7 @@ def update_car():
     global collision_flag, collision_start_time
     global boost_active, boost_start_time
     global cheat_message
-    global paused , lives 
-    if lives <= 0:
-        
-        return
+    global paused ,lives
     if paused:
         return  # Game is paused
     if enemy_win or finish_crossed:
@@ -988,8 +985,6 @@ def update_car():
             current_speed = normal_speed
         glutPostRedisplay()
         return
-    check_enemy_player_collision()
-    apply_collision_response()
     check_health_kit_collision()
     check_bomb_collision()
 
@@ -1014,6 +1009,7 @@ def update_car():
 
     # Check collision going forward
     if is_car_colliding():
+        
             print("Collision detected! Life lost.")
             collision_flag = True
             collision_start_time = now
@@ -1021,8 +1017,8 @@ def update_car():
             current_speed = 0
             # Decrease life on collision
             lives = max(0, lives - 1)
-            
-
+            if lives <= 0:
+                print("Game Over! No lives remaining.")
     result = has_crossed_finish_line()
     if not finish_crossed:
         if result == "correct":
@@ -1154,9 +1150,9 @@ def showScreen():
         draw_enemy_car(ecar.position[0], ecar.position[1], ecar.position[2], ecar.angle)
     if finish_crossed:
         draw_text(400, 400, "Congratulations! You finished the race!")
-    if lives <= 0:
-        draw_text(450, 400, "Game Over! No lives remaining.")
 
+   
+    draw_text(10, 750, f"Lives: {lives}")
     global kits_spawned
 
     if not kits_spawned:
@@ -1170,8 +1166,9 @@ def showScreen():
         draw_health_kit(hx, hy, 20)
     for (bx, by) in bombs:
         draw_bomb(bx, by, 20)
-    draw_life_counter()
-    draw_dashboard()     
+    draw_life_counter()   
+    # Draw the comprehensive dashboard (replaces individual text elements)
+    draw_dashboard()    
     # --- Mini viewport (top-right corner) ---
     mini_width, mini_height = 200, 200
     glViewport(1000 - mini_width - 20, 800 - mini_height - 20, mini_width, mini_height)
@@ -1237,6 +1234,58 @@ def showScreen():
     glViewport(0, 0, 1000, 800)
 
     glutSwapBuffers()
+
+def draw_life_counter():
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    gluOrtho2D(0, 1000, 0, 800)  # Match your window coordinates
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+    
+    # Position and size of life counter - MOVED DOWNWARD
+    start_x, start_y = 20, 700  # Changed from 760 to 700 (moved 60 pixels down)
+    line_length = 50
+    line_thickness = 8
+    spacing = 10
+    
+    # Draw life lines
+    for i in range(10):
+        if i < lives:
+            # Green for 5+ lives, red for less than 5 lives
+            if lives >= 5:
+                glColor3f(0.0, 1.0, 0.0)  # Green for good health
+            else:
+                glColor3f(1.0, 0.0, 0.0)  # Red for critical health
+        else:
+            glColor3f(0.3, 0.3, 0.3)  # Gray for lost lives
+            
+        y_pos = start_y - (i * (line_thickness + spacing))
+        
+        glBegin(GL_QUADS)
+        glVertex2f(start_x, y_pos)
+        glVertex2f(start_x + line_length, y_pos)
+        glVertex2f(start_x + line_length, y_pos - line_thickness)
+        glVertex2f(start_x, y_pos - line_thickness)
+        glEnd()
+    
+    # Draw numeric life count BELOW the lines (centered)
+    text_y_position = start_y - (10 * (line_thickness + spacing)) - 15  # Below all lines
+    text_x_position = start_x + (line_length / 2) - 5  # Center the number
+    
+    glColor3f(1, 1, 1)
+    glRasterPos2f(text_x_position, text_y_position)
+    
+    # Convert lives to string and draw each character
+    lives_text = str(lives)
+    for ch in lives_text:
+        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
+    
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
 
 def draw_dashboard():
     glMatrixMode(GL_PROJECTION)
@@ -1343,59 +1392,8 @@ def draw_dashboard():
     glPopMatrix()
     glMatrixMode(GL_MODELVIEW)
 
-def draw_life_counter():
-    glMatrixMode(GL_PROJECTION)
-    glPushMatrix()
-    glLoadIdentity()
-    gluOrtho2D(0, 1000, 0, 800)  # Match your window coordinates
-    glMatrixMode(GL_MODELVIEW)
-    glPushMatrix()
-    glLoadIdentity()
-    
-    # Position and size of life counter - MOVED DOWNWARD
-    start_x, start_y = 20, 700  # Changed from 760 to 700 (moved 60 pixels down)
-    line_length = 50
-    line_thickness = 8
-    spacing = 10
-    
-    # Draw life lines
-    for i in range(10):
-        if i < lives:
-            # Green for 5+ lives, red for less than 5 lives
-            if lives >= 5:
-                glColor3f(0.0, 1.0, 0.0)  # Green for good health
-            else:
-                glColor3f(1.0, 0.0, 0.0)  # Red for critical health
-        else:
-            glColor3f(0.3, 0.3, 0.3)  # Gray for lost lives
-            
-        y_pos = start_y - (i * (line_thickness + spacing))
-        
-        glBegin(GL_QUADS)
-        glVertex2f(start_x, y_pos)
-        glVertex2f(start_x + line_length, y_pos)
-        glVertex2f(start_x + line_length, y_pos - line_thickness)
-        glVertex2f(start_x, y_pos - line_thickness)
-        glEnd()
-    
-    # Draw numeric life count BELOW the lines (centered)
-    text_y_position = start_y - (10 * (line_thickness + spacing)) - 15  # Below all lines
-    text_x_position = start_x + (line_length / 2) - 5  # Center the number
-    
-    glColor3f(1, 1, 1)
-    glRasterPos2f(text_x_position, text_y_position)
-    
-    # Convert lives to string and draw each character
-    lives_text = str(lives)
-    for ch in lives_text:
-        glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
-    
-    glPopMatrix()
-    glMatrixMode(GL_PROJECTION)
-    glPopMatrix()
-    glMatrixMode(GL_MODELVIEW)
-
-
+# Remove the old draw_life_counter function and replace it with this dashboard
+# Also remove the individual text drawing calls from showScreen and replace with this
 def main():
     glutInit(sys.argv)
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH)
