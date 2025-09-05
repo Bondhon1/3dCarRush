@@ -4,46 +4,46 @@ import random
 from OpenGL.GL import *
 from OpenGL.GLUT import *
 from OpenGL.GLU import *
+from OpenGL.GLUT import GLUT_BITMAP_HELVETICA_18
 import time
 import numpy as np  # At top with other imports
-
+import threading
 
 # Camera and constants
 camera_offset = [0, -150, 75]  # Camera offset relative to car
-car_pos = [50, -600, 10]  # Start car at y = -GRID_LENGTH, slightly above ground
+car_pos = [50, -600, 10]  
 car_angle = 0.0   # Angle in degrees
-fovY = 60  # Reduced for better focus
-GRID_LENGTH = 600
+fovY = 60  
+g_length = 600
 selected_layout = None
 lives = 10
 road_positions = set()
 border_positions = set()
-cheat_message = ""  # Global or at top
+cheat_message = ""  
 paused = False
-# --- Movement state ---
+# Movement speed
 normal_speed = 15.0
 boost_speed = 20.0
 slow_speed = 10.0
-
+fpv = False  # first-person view mode
+gun_follow = False
 
 current_speed = normal_speed
 bullets = []  # list of active bullets (x, y, z, angle)
-gun_angle = 0.0
+gun_angle = 180.0
 gun_turn_speed = 5.0   # degrees per key press
 bullet_speed = 30.0    # speed of bullet units/frame
 
 
 turn_speed = 3        # degrees per press
-CAR_LENGTH = 15 * 2.5
-CAR_WIDTH = 15 * 1.2
+c_length = 15 * 2.5
+c_width = 15 * 1.2
 
 
 enemy_player_collision_flag = False
 enemy_player_collision_start_time = 0
 collision_flag = False
 collision_start_time = 0
-COLLISION_DURATION = 2.0     # seconds
-COLLISION_PUSH_SPEED = 0.5   # constant displacement per frame
 
 
 boost_active = False
@@ -60,11 +60,11 @@ prev_car_pos = car_pos[:]
 finish_line_width = 450  # or match the road width at the finish line
 
 # Global constants for borders
-BORDER_HEIGHT = 30.0
-BORDER_THICKNESS = 12.0
+border_height = 30.0
+border_thickness = 12.0
 last_speed = 0.0
 last_speed_time = 0.0
-
+tree_positions = []
 bombs = []
 explosions = []  # each entry: {'pos': (x, y), 'start_time': time}
 # --- NEW GLOBALS ---
@@ -81,22 +81,18 @@ speed_breaker_effect_active = False
 # Jump physics globals
 jump_active = False
 jump_start_time = 0
-MAX_JUMP_HEIGHT = 20
-JUMP_DURATION = 0.8
+jump_height_max = 20
+jump_duration = 0.8
 breaker_hit_mode = None   # "hit" or "jump"
 
 
 def draw_speed_breaker(x, y, width=20, height=6, depth=30, slices=20):
-
-
     glPushMatrix()
     glTranslatef(x, y, 0)
-
 
     for i in range(slices):
         theta1 = (i / slices) * math.pi
         theta2 = ((i + 1) / slices) * math.pi
-
 
         z1 = math.sin(theta1) * height
         z2 = math.sin(theta2) * height
@@ -187,15 +183,14 @@ def check_speed_breaker_effect():
                 speed_breaker_effect_timer = time.time()
 
                 if last_speed <= slow_speed:
-                    # --- Slow hit ---
+                    # Slow hit
                     jump_active = True
                     jump_start_time = time.time()
                     breaker_hit_mode = "hit"
                     car_pos[2] = 20  # small bump
                     
-                    print("[Breaker] Slow → Hit! Life lost.")
                 else:
-                    # --- Fast jump ---
+                    # Fast jump 
                     jump_active = True
                     jump_start_time = time.time()
                     breaker_hit_mode = "jump"
@@ -203,7 +198,6 @@ def check_speed_breaker_effect():
                     current_speed = normal_speed * 0.8
                     if not shield_active:
                         lives = max(0, lives - 1)
-                    print("[Breaker] Fast → Jumping over!")
             return
     
     if speed_breaker_effect_active:
@@ -215,24 +209,22 @@ def update_jump_physics():
     global jump_active, car_pos, breaker_hit_mode
     if jump_active:
         elapsed = time.time() - jump_start_time
-        if elapsed >= JUMP_DURATION:
+        if elapsed >= jump_duration:
             jump_active = False
             breaker_hit_mode = None
             car_pos[2] = 10  # back to ground
-            print("Player landed!")
         else:
             if breaker_hit_mode == "hit":
                 # stay low, no parabola
                 car_pos[2] = 20
             elif breaker_hit_mode == "jump":
                 # full jump parabola
-                progress = elapsed / JUMP_DURATION
-                jump_height = 4 * MAX_JUMP_HEIGHT * progress * (1 - progress)
+                progress = elapsed / jump_duration
+                jump_height = 4 * jump_height_max * progress * (1 - progress)
                 car_pos[2] = max(90, 10 + jump_height)
 
 
 def check_enemy_speed_breaker_collision():
-    """Check enemy cars collision with speed breakers"""
     speed_breaker_positions = [
         (2000, -2800), (-3600, -4000), (-5200, -2400)
     ]
@@ -256,19 +248,18 @@ def check_enemy_speed_breaker_collision():
             if dist_x <= 300 and dist_y <= 100:
                 car.jump_active = True
                 car.jump_start_time = time.time()
-                print(f"Enemy car jumping!")
+
                 break
 def update_enemy_jump_physics():
-    """Update jump physics for enemy cars"""
     for car in enemy_cars:
         if hasattr(car, 'jump_active') and car.jump_active:
             elapsed = time.time() - car.jump_start_time
-            if elapsed >= JUMP_DURATION:
+            if elapsed >= jump_duration:
                 car.jump_active = False
                 car.position[2] = 10
             else:
-                progress = elapsed / JUMP_DURATION
-                jump_height = 4 * MAX_JUMP_HEIGHT * progress * (1 - progress)
+                progress = elapsed / jump_duration
+                jump_height = 4 * jump_height_max * progress * (1 - progress)
                 car.position[2] = 10 + jump_height
 def spawn_health_kits():
     global health_kits
@@ -305,10 +296,8 @@ def check_health_kit_collision():
         if dist < 60:  # pickup radius
             if lives < 10:
                 lives += 1
-                print("Picked up health kit! Lives =", lives)
             else:
-                print("Health already full!")
-            collected.append((hx, hy))
+                collected.append((hx, hy))
     # Remove collected kits
     health_kits = [pos for pos in health_kits if pos not in collected]
 
@@ -320,46 +309,37 @@ def spawn_bombs():
     road_list = list(road_positions)
     random.shuffle(road_list)
     bombs = road_list[:6]  # pick 6 random road positions
-def draw_bomb(x, y, size=20, height=30):
-    """Draw a 3D bomb at (x, y). Black base with yellow top."""
+
+
+def draw_bomb(x, y, base_size=20, height=30):
     glPushMatrix()
-    glTranslatef(x, y, height // 2)  # Raise bomb slightly above ground
+    glTranslatef(x, y, height // 2)  
 
+    # --- Pulsating effect using Python time ---
+    t = time.time()  # current time in seconds
+    pulse = 0.1 * math.sin(t * 5)  # oscillates smoothly
+    size = base_size * (1.0 + pulse)
 
-    # Black base - cylinder
-    glColor3f(0.1, 0.0, 0.0)
+    # Red body (main bomb sphere)
+    glColor3f(1.0, 0.0, 0.0)
     quad = gluNewQuadric()
-    gluCylinder(quad, size * 0.6, size * 0.6, height * 0.7, 20, 5)
+    gluSphere(quad, size, 30, 30)
+
+    # Black small sphere (fuse base)
+    glTranslatef(0, 0, size * 0.9)
+    glColor3f(0.0, 0.0, 0.0)
+    gluSphere(quad, size * 0.3, 20, 20)
+
+    # Fuse (small cylinder/line)
+    glColor3f(0.4, 0.2, 0.1)  # brownish
     glPushMatrix()
-    glTranslatef(0, 0, height * 0.7)
-    gluDisk(quad, 0, size * 0.6, 20, 1)  # top disk of base
-    glPopMatrix()
-    gluDisk(quad, 0, size * 0.6, 20, 1)      # bottom disk
-    gluDeleteQuadric(quad)
-
-
-    # Yellow top - sphere
-    glColor3f(1.0, 1.0, 0.0)
-    glTranslatef(0, 0, height * 0.7)  # move to top of cylinder
-    quad2 = gluNewQuadric()
-    gluSphere(quad2, size * 0.4, 20, 20)
-    gluDeleteQuadric(quad2)
-
-
+    glTranslatef(0, 0, size * 0.3)
+    gluCylinder(quad, 0.2 * size, 0.15 * size, size * 0.8, 10, 5)
     glPopMatrix()
 
+  
+    glPopMatrix()
 
-
-
-    # Yellow top (smaller circle)
-    glColor3f(1.0, 1.0, 0.0)
-    glBegin(GL_TRIANGLE_FAN)
-    glVertex2f(x, y + size * 0.6)
-    for angle in range(0, 361, 10):
-        rad = math.radians(angle)
-        glVertex2f(x + math.cos(rad) * (size * 0.4),
-                   y + size * 0.6 + math.sin(rad) * (size * 0.4))
-    glEnd()
 def check_bomb_collision():
     global bombs, lives, explosions
     car_x, car_y = car_pos[0], car_pos[1]
@@ -375,42 +355,46 @@ def check_bomb_collision():
         # Add explosion at bomb location with current time
         explosions.append({'pos': bomb_hit, 'start_time': time.time()})
 
+def draw_triangle_explosion(x, y, start_time, duration=1.0, spikes=25, max_radius=40):
+    elapsed = time.time() - start_time
+    if elapsed > duration:
+        return False
 
-def draw_simple_cone(x, y, scale, segments=30, height=20, base_radius=10):
+    t = elapsed / duration  # 0 → 1 progression
+    radius = max_radius * t # grows outward
+
     glPushMatrix()
     glTranslatef(x, y, 0)
-    glRotatef(90, 1, 0, 0)  # rotate cone to point upwards along +Y axis
-    glScalef(scale, scale, scale)
-    
-    # Draw cone surface with vertical red to yellow gradient
-    glBegin(GL_TRIANGLE_FAN)
-    # Tip vertex (yellow)
-    glColor3f(1.0, 1.0, 0.0)  # yellow at apex
-    glVertex3f(0, height, 0)
-    
-    # Base circle vertices (red)
-    glColor3f(1.0, 0.0, 0.0)  # red at base
-    for i in range(segments + 1):
-        angle = 2 * math.pi * i / segments
-        x_pos = base_radius * math.cos(angle)
-        z_pos = base_radius * math.sin(angle)
-        glVertex3f(x_pos, 0, z_pos)
-    glEnd()
-    
-    glPopMatrix()
+    glDisable(GL_DEPTH_TEST)
+    glBegin(GL_TRIANGLES)
+    for i in range(spikes):
+        # Random angle and uneven length for jagged look
+        angle = (2 * math.pi / spikes) * i + random.uniform(-0.2, 0.2)
+        r1 = radius * random.uniform(0.6, 1.0)
+        r2 = radius * random.uniform(0.3, 0.7)
 
+        # Use solid fiery colors (yellow near center, red at edges)
+        glColor3f(1.0, 1.0, 0.0)  # yellow at core
+        glVertex3f(0, 0, 0)
+
+        glColor3f(1.0, 0.5, 0.0)  # orange spike
+        glVertex3f(math.cos(angle) * r1, math.sin(angle) * r1, 0)
+
+        glColor3f(0.8, 0.0, 0.0)  # deep red edge
+        glVertex3f(math.cos(angle + 0.15) * r2, math.sin(angle + 0.15) * r2, 0)
+    glEnd()
+    glEnable(GL_DEPTH_TEST)
+    glPopMatrix()
+    return True
 
 def draw_all_explosions():
     global explosions
-    current_time = time.time()
-    active_explosions = []
+    active = []
     for exp in explosions:
-        elapsed = current_time - exp['start_time']
-        if elapsed < 1.0:
-            scale = 0.3 + 1.2 * (elapsed / 1.0)  # grow scale from 0.3 to 1.5
-            draw_simple_cone(exp['pos'][0], exp['pos'][1], scale)
-            active_explosions.append(exp)
-    explosions = active_explosions
+        if draw_triangle_explosion(exp['pos'][0], exp['pos'][1], exp['start_time']):
+            active.append(exp)
+    explosions = active
+
 
 
 def spawn_shield_kits():
@@ -429,9 +413,6 @@ def draw_shield_kit(x, y, z=20):
     half_size = size / 2
     depth = size / 2  # depth for 3D effect
 
-
-    # Draw diamond by combining two pyramids (top and bottom)
-    # Top pyramid (pointing up)
     glBegin(GL_TRIANGLES)
     # Front face
     glVertex3f(0, half_size, 0)           # top point
@@ -494,8 +475,6 @@ def draw_shield_kit(x, y, z=20):
     glPopMatrix()
 
 
-
-
 def check_shield_kit_collision():
     global shield_kits, shield_active, shield_start_time
     cx, cy, cz = car_pos
@@ -530,10 +509,6 @@ def add_arc_to_set(center_x, center_y, inner_r, outer_r, angle_start, angle_end,
             store.add((x, y))
             theta += dtheta if angle_end > angle_start else -dtheta
         r += dr
-
-
-
-
 
 
 def draw_text(x, y, text, font=GLUT_BITMAP_HELVETICA_18):
@@ -579,9 +554,7 @@ def draw_straight_road(center_x, start_y, length, road_width=400):
             glEnd()
 
 
-
-
-def draw_vertical_borders(x_left, x_right, y_start, y_end, height=BORDER_HEIGHT, thickness=BORDER_THICKNESS):
+def draw_vertical_borders(x_left, x_right, y_start, y_end, height=border_height, thickness=border_thickness):
     # Left border
     add_rectangle_to_set(x_left, x_left + thickness, y_start, y_end, border_positions)
     # Right border
@@ -625,9 +598,7 @@ def draw_horizontal_road(center_y, start_x, length, road_width=400):
             glEnd()
 
 
-
-
-def draw_horizontal_borders(y_left, y_right, x_start, x_end, height=BORDER_HEIGHT, thickness=BORDER_THICKNESS):
+def draw_horizontal_borders(y_left, y_right, x_start, x_end, height=border_height, thickness=border_thickness):
     add_rectangle_to_set(x_start, x_end, y_left - thickness, y_left, border_positions)
     add_rectangle_to_set(x_start, x_end, y_right, y_right + thickness, border_positions)
     glColor3f(0.6, 0.6, 0.2)
@@ -669,6 +640,7 @@ def draw_curved_road(center_x, center_y, curve_radius, road_width=400, angle_sta
         glVertex3f(outer_x2, outer_y2, 0.1)
         glVertex3f(inner_x2, inner_y2, 0.1)
         glEnd()
+        
     draw_curved_border(center_x + x_shift, center_y, curve_radius, half_width, angle_start, angle_end)
     glColor3f(1, 1, 1)
     lane_offsets = [-100, 0, 100]
@@ -707,7 +679,7 @@ def draw_curved_road(center_x, center_y, curve_radius, road_width=400, angle_sta
             glEnd()
 
 
-def draw_curved_border(center_x, center_y, radius, half_width, start_angle, end_angle, height=BORDER_HEIGHT, thickness=BORDER_THICKNESS):
+def draw_curved_border(center_x, center_y, radius, half_width, start_angle, end_angle, height=border_height, thickness=border_thickness):
     # Inner and outer border arcs
     add_arc_to_set(center_x, center_y, radius - half_width, radius - half_width + thickness, start_angle, end_angle, border_positions)
     add_arc_to_set(center_x, center_y, radius + half_width - thickness, radius + half_width, start_angle, end_angle, border_positions)
@@ -752,12 +724,8 @@ def draw_finish_line(x, y, angle=0, width=450, depth=20, banner_height=30, banne
     base_width = 10  # thickness of base supports
     base_y_bottom = depth // 2
     banner_base_z = 150  # fixed height of base tops where banner attaches
-
-
     # Draw bases - vertical quads straight up from ground to banner_base_z
     glColor3f(0.1, 0.1, 0.1)  # dark bases
-
-
     # Left base
     glBegin(GL_QUADS)
     glVertex3f(-banner_width // 2 - base_width, base_y_bottom, 0)
@@ -797,84 +765,73 @@ def draw_finish_line(x, y, angle=0, width=450, depth=20, banner_height=30, banne
     glPopMatrix()
 
 
-
-
 def layout1():
     global finish_line_pos, finish_line_angle
-    draw_straight_road(center_x=0, start_y=-GRID_LENGTH, length=2*GRID_LENGTH)
-    draw_curved_road(center_x=100, center_y=GRID_LENGTH-1200, curve_radius=200, angle_start=math.pi, angle_end=math.pi+math.pi/2, x_shift=100)
-    draw_horizontal_road(center_y=GRID_LENGTH-1400, start_x=200, length=1600)
-    draw_curved_road(center_x=1800, center_y=-GRID_LENGTH-400, curve_radius=200, angle_start=0, angle_end=math.pi/2)
-    draw_straight_road(center_x=2000, start_y=-GRID_LENGTH-1600, length=2*GRID_LENGTH)
-    draw_straight_road(center_x=2000, start_y=-GRID_LENGTH-2800, length=2*GRID_LENGTH)
-    draw_curved_road(center_x=1700, center_y=GRID_LENGTH-4000, curve_radius=200, angle_start=0, angle_end=-math.pi/2, x_shift=100)
-    draw_horizontal_road(center_y=GRID_LENGTH-4200, start_x=200, length=1600)
-    draw_horizontal_road(center_y=GRID_LENGTH-4200, start_x=-2200, length=2400)
-    draw_curved_road(center_x=-2300, center_y=GRID_LENGTH-4000, curve_radius=200, angle_start=-math.pi, angle_end=-math.pi/2, x_shift=100)
-    draw_straight_road(center_x=-2400, start_y=-GRID_LENGTH-2800, length=6*GRID_LENGTH+400)
-    draw_curved_road(center_x=-2300, center_y=GRID_LENGTH, curve_radius=200, angle_start=math.pi, angle_end=math.pi/2, x_shift=100)
-    draw_horizontal_road(center_y=GRID_LENGTH+200, start_x=-2200, length=2000)
-    draw_curved_road(center_x=-300, center_y=GRID_LENGTH, curve_radius=200, angle_start=0, angle_end=math.pi/2, x_shift=100)
+    draw_straight_road(center_x=0, start_y=-g_length, length=2*g_length)
+    draw_curved_road(center_x=100, center_y=g_length-1200, curve_radius=200, angle_start=math.pi, angle_end=math.pi+math.pi/2, x_shift=100)
+    draw_horizontal_road(center_y=g_length-1400, start_x=200, length=1600)
+    draw_curved_road(center_x=1800, center_y=-g_length-400, curve_radius=200, angle_start=0, angle_end=math.pi/2)
+    draw_straight_road(center_x=2000, start_y=-g_length-1600, length=2*g_length)
+    draw_straight_road(center_x=2000, start_y=-g_length-2800, length=2*g_length)
+    draw_curved_road(center_x=1700, center_y=g_length-4000, curve_radius=200, angle_start=0, angle_end=-math.pi/2, x_shift=100)
+    draw_horizontal_road(center_y=g_length-4200, start_x=200, length=1600)
+    draw_horizontal_road(center_y=g_length-4200, start_x=-2200, length=2400)
+    draw_curved_road(center_x=-2300, center_y=g_length-4000, curve_radius=200, angle_start=-math.pi, angle_end=-math.pi/2, x_shift=100)
+    draw_straight_road(center_x=-2400, start_y=-g_length-2800, length=6*g_length+400)
+    draw_curved_road(center_x=-2300, center_y=g_length, curve_radius=200, angle_start=math.pi, angle_end=math.pi/2, x_shift=100)
+    draw_horizontal_road(center_y=g_length+200, start_x=-2200, length=2000)
+    draw_curved_road(center_x=-300, center_y=g_length, curve_radius=200, angle_start=0, angle_end=math.pi/2, x_shift=100)
     # Place finish line at start of first straight
-    finish_line_pos = (0, -GRID_LENGTH-60)
+    finish_line_pos = (0, -g_length-60)
     finish_line_angle = 0
     draw_speed_breaker(2000, -2800)
     draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle, width=finish_line_width)
     setup_speed_breakers_layout1()
-    
-
-
 
 
 def layout2():
     global finish_line_pos, finish_line_angle
-    draw_straight_road(center_x=0, start_y=-GRID_LENGTH-2400, length=6*GRID_LENGTH)
-    draw_curved_road(center_x=-300, center_y=GRID_LENGTH-3600, curve_radius=200, angle_start=0, angle_end=-math.pi/2, x_shift=100)
-    draw_horizontal_road(center_y=GRID_LENGTH-3800, start_x=-3400, length=3200)
-    draw_curved_road(center_x=-3500, center_y=GRID_LENGTH-4000, curve_radius=200, angle_start=math.pi, angle_end=math.pi/2, x_shift=100)
-    draw_straight_road(center_x=-3600, start_y=-GRID_LENGTH-4000, length=2*GRID_LENGTH)
-    draw_curved_road(center_x=-3900, center_y=GRID_LENGTH-5200, curve_radius=200, angle_start=0, angle_end=-math.pi/2, x_shift=100)
-    draw_horizontal_road(center_y=GRID_LENGTH-5400, start_x=-6000, length=2200)
-    draw_curved_road(center_x=-6100, center_y=GRID_LENGTH-5200, curve_radius=200, angle_start=-math.pi, angle_end=-math.pi/2, x_shift=100)
-    draw_straight_road(center_x=-6200, start_y=-GRID_LENGTH-4000, length=8*GRID_LENGTH+400)
-    draw_curved_road(center_x=-6100, center_y=GRID_LENGTH, curve_radius=200, angle_start=math.pi, angle_end=math.pi/2, x_shift=100)
-    draw_horizontal_road(center_y=GRID_LENGTH+200, start_x=-6000, length=5800)
-    draw_curved_road(center_x=-300, center_y=GRID_LENGTH, curve_radius=200, angle_start=0, angle_end=math.pi/2, x_shift=100)
+    draw_straight_road(center_x=0, start_y=-g_length-2400, length=6*g_length)
+    draw_curved_road(center_x=-300, center_y=g_length-3600, curve_radius=200, angle_start=0, angle_end=-math.pi/2, x_shift=100)
+    draw_horizontal_road(center_y=g_length-3800, start_x=-3400, length=3200)
+    draw_curved_road(center_x=-3500, center_y=g_length-4000, curve_radius=200, angle_start=math.pi, angle_end=math.pi/2, x_shift=100)
+    draw_straight_road(center_x=-3600, start_y=-g_length-4000, length=2*g_length)
+    draw_curved_road(center_x=-3900, center_y=g_length-5200, curve_radius=200, angle_start=0, angle_end=-math.pi/2, x_shift=100)
+    draw_horizontal_road(center_y=g_length-5400, start_x=-6000, length=2200)
+    draw_curved_road(center_x=-6100, center_y=g_length-5200, curve_radius=200, angle_start=-math.pi, angle_end=-math.pi/2, x_shift=100)
+    draw_straight_road(center_x=-6200, start_y=-g_length-4000, length=8*g_length+400)
+    draw_curved_road(center_x=-6100, center_y=g_length, curve_radius=200, angle_start=math.pi, angle_end=math.pi/2, x_shift=100)
+    draw_horizontal_road(center_y=g_length+200, start_x=-6000, length=5800)
+    draw_curved_road(center_x=-300, center_y=g_length, curve_radius=200, angle_start=0, angle_end=math.pi/2, x_shift=100)
     # Place finish line at start of first straight
     draw_speed_breaker(-3600, -4000)
     
-    finish_line_pos = (0, -GRID_LENGTH-2400 + 40)
+    finish_line_pos = (0, -g_length-2400 + 40)
     finish_line_angle = 0
     draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle, width=finish_line_width)
     setup_speed_breakers_layout2()
 
 
-
-
 def layout3():
     global finish_line_pos, finish_line_angle
-    draw_straight_road(center_x=0, start_y=-GRID_LENGTH-2400, length=6*GRID_LENGTH)
-    draw_curved_road(center_x=-300, center_y=GRID_LENGTH-3600, curve_radius=200, angle_start=0, angle_end=-math.pi/2, x_shift=100)
-    draw_horizontal_road(center_y=GRID_LENGTH-3800, start_x=-5000, length=4800)
-    draw_curved_road(center_x=-5100, center_y=GRID_LENGTH-3600, curve_radius=200, angle_start=-math.pi, angle_end=-math.pi/2, x_shift=100)
-    draw_straight_road(center_x=-5200, start_y=-GRID_LENGTH-2400, length=6*GRID_LENGTH)
-    draw_curved_road(center_x=-5100, center_y=GRID_LENGTH, curve_radius=200, angle_start=math.pi, angle_end=math.pi/2, x_shift=100)
-    draw_horizontal_road(center_y=GRID_LENGTH+200, start_x=-5000, length=4800)
-    draw_curved_road(center_x=-300, center_y=GRID_LENGTH, curve_radius=200, angle_start=0, angle_end=math.pi/2, x_shift=100)
+    draw_straight_road(center_x=0, start_y=-g_length-2400, length=6*g_length)
+    draw_curved_road(center_x=-300, center_y=g_length-3600, curve_radius=200, angle_start=0, angle_end=-math.pi/2, x_shift=100)
+    draw_horizontal_road(center_y=g_length-3800, start_x=-5000, length=4800)
+    draw_curved_road(center_x=-5100, center_y=g_length-3600, curve_radius=200, angle_start=-math.pi, angle_end=-math.pi/2, x_shift=100)
+    draw_straight_road(center_x=-5200, start_y=-g_length-2400, length=6*g_length)
+    draw_curved_road(center_x=-5100, center_y=g_length, curve_radius=200, angle_start=math.pi, angle_end=math.pi/2, x_shift=100)
+    draw_horizontal_road(center_y=g_length+200, start_x=-5000, length=4800)
+    draw_curved_road(center_x=-300, center_y=g_length, curve_radius=200, angle_start=0, angle_end=math.pi/2, x_shift=100)
     # Place finish line at start of first straight
     draw_speed_breaker(-5200, -2400)
    
-    finish_line_pos = (0, -GRID_LENGTH-2400 + 40)
+    finish_line_pos = (0, -g_length-2400 + 40)
     finish_line_angle = 0
     draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle, width=finish_line_width)
     setup_speed_breakers_layout3()
 
-
-
-
 def draw_road():
     selected_layout()
-
 
 def draw_cube(size):
     glBegin(GL_QUADS)
@@ -912,29 +869,8 @@ def draw_cube(size):
 
 
 
-
-def draw_cylinder(radius, height, slices=20):
-    quad = gluNewQuadric()
-    gluCylinder(quad, radius, radius, height, slices, 1)
-    # Top disk
-    glPushMatrix()
-    glTranslatef(0, 0, height)
-    gluDisk(quad, 0, radius, slices, 1)
-    glPopMatrix()
-    # Bottom disk
-    glPushMatrix()
-    glRotatef(180, 1, 0, 0)
-    gluDisk(quad, 0, radius, slices, 1)
-    glPopMatrix()
-    gluDeleteQuadric(quad)
-
-
-
-
-# Adjust the gun size in draw_player_car function
 def draw_player_car(x=0, y=0, z=30, car_angle=0, gun_angle=0):
     scale_factor = 15
-
 
     glPushMatrix()
     glTranslatef(x, y, z)
@@ -972,7 +908,7 @@ def draw_player_car(x=0, y=0, z=30, car_angle=0, gun_angle=0):
     # rotate around car center by gun_angle (so gun swivels on the turret)
     glRotatef(gun_angle, 0, 0, 1)
     # then translate OUT to the gun mount position
-    glTranslatef(0.6 * scale_factor, 0.0, 1.2 * scale_factor)  # Adjusted position
+    glTranslatef(0.8 * scale_factor, 0.0, 1.2 * scale_factor)  # Adjusted position
     
     # Draw gun base (wider)
     glPushMatrix()
@@ -985,7 +921,7 @@ def draw_player_car(x=0, y=0, z=30, car_angle=0, gun_angle=0):
     # align cylinder axis
     glRotatef(90, 0, 1, 0)
     glColor3f(0.2, 0.2, 0.2)
-    draw_cylinder(0.15 * scale_factor, 1.5 * scale_factor)  # Bigger and longer barrel
+    draw_cylinder(0.15 * scale_factor, 2.5 * scale_factor)  # Bigger and longer barrel
     glPopMatrix()
 
 
@@ -1010,10 +946,8 @@ def draw_bullets():
         glPushMatrix()
         glTranslatef(bx, by, bz)
         glColor3f(1.0, 0.0, 0.0)  # red bullets
-        glutSolidSphere(3, 10, 10)
+        glutSolidSphere(2, 20, 20)
         glPopMatrix()
-
-
 
 
 def update_bullets():
@@ -1043,7 +977,6 @@ def update_bullets():
             # Apply slow effect for this enemy
             active_collision_effects.add((id(hit_enemy), time.time()))
             hit_enemy.lives -= 1
-            print(f"Enemy hit! Lives left: {hit_enemy.lives}")
             continue  # bullet vanishes on hit
 
 
@@ -1054,13 +987,6 @@ def update_bullets():
 
     bullets = new_bullets
 
-
-
-
-
-
-
-
 # === Shooting function ===
 def fire_bullet():
     global bullets, collision_flag
@@ -1069,9 +995,6 @@ def fire_bullet():
         # Combine car_angle and gun_angle for absolute bullet direction
         bullet_angle = (car_angle + gun_angle) % 360
         bullets.append((bx, by, bz, bullet_angle))
-
-
-
 
 # --- Enemy cars ---
 class EnemyCar:
@@ -1083,8 +1006,7 @@ class EnemyCar:
         self.speed = speed
         self.finished = False
         self.collision_response = {}
-        self.lives = 5
-        
+        self.lives = 4
 
 
         # Initialize angle toward second waypoint (if exists)
@@ -1096,15 +1018,11 @@ class EnemyCar:
             self.angle = 0
 
 
-
-
 # All enemy cars (created after layout selected)
 enemy_cars = []
-ENEMY_COUNT = 3  # Set to 2 or 3 as needed
-
+enemy_num = 3  # Set to 2 or 3 as needed
 
 enemy_win = False  # Track if enemy finishes before player
-
 
 def draw_enemy_car(x=0, y=0, z=30, car_angle=0):
     scale_factor = 15
@@ -1125,23 +1043,23 @@ def draw_enemy_car(x=0, y=0, z=30, car_angle=0):
     draw_cube(1.0)
     glPopMatrix()
     # Wheels
-    wheel_positions = [(-1.4 * scale_factor, 1.3 * scale_factor, 0.0),
-                      (-1.4 * scale_factor, -1.3 * scale_factor, 0.0),
-                      (1.4 * scale_factor, 1.3 * scale_factor, 0.0),
-                      (1.4 * scale_factor, -1.3 * scale_factor, 0.0)]
+    wheel_positions = [(-1.6 * scale_factor, 1.3 * scale_factor, -2.0),
+                      (-1.6 * scale_factor, -1.3 * scale_factor, -2.0),
+                      (1.6 * scale_factor, 1.3 * scale_factor, -2.0),
+                      (1.6 * scale_factor, -1.3 * scale_factor, -2.0)]
     for wx, wy, wz in wheel_positions:
         glPushMatrix()
         glTranslatef(wx, wy, wz)
         glRotatef(90, 1, 0, 0)
         glColor3f(0.05, 0.05, 0.05)
-        draw_cylinder(0.3 * scale_factor, 0.2 * scale_factor)
+        draw_cylinder(0.4 * scale_factor, 0.2 * scale_factor)
         glPopMatrix()
     glPopMatrix()
 
 
 def get_enemy_paths_for_layout(layout_num):
     # Create displacements for each enemy car
-    offsets = np.linspace(-100, 100, ENEMY_COUNT+1)
+    offsets = np.linspace(-100, 100, enemy_num+1)
     base_paths = []
 
 
@@ -1191,7 +1109,7 @@ def get_enemy_paths_for_layout(layout_num):
 
 def enemy_crossed_finish_area(car):
     global finish_line_pos, finish_line_width
-    # Define a rectangular area around the finish line (adjust dimensions as needed)
+    # rectangular area around the finish line (adjust dimensions as needed)
     fx, fy = finish_line_pos
     half_width = finish_line_width / 2
     
@@ -1211,17 +1129,24 @@ def enemy_crossed_finish_area(car):
     return False
 
 
-
-
-# At initialization, set car.angle = math.atan2(start_dy, start_dx)
-
-
-COLLISION_EFFECT_TIME = 5  # seconds
+collission_effect_time = 5  # seconds
 
 
 def update_enemy_cars():
     global enemy_win, finish_crossed, active_collision_effects
     for car in enemy_cars:
+        if car.lives <= 0:
+            car.position = list(car.path_points[0])   # Reset to first point
+            car.segment = 0
+            car.lives = 4                             # Reset lives
+            car.finished = False
+            if len(car.path_points) > 1:
+                dx = car.path_points[1][0] - car.path_points[0][0]
+                dy = car.path_points[1][1] - car.path_points[0][1]
+                car.angle = math.degrees(math.atan2(dy, dx))
+            else:
+                car.angle = 0
+            continue  # Skip rest of loop for this frame
         if car.finished:
             car.position = list(car.path_points[-1])
             if len(car.path_points) > 1:
@@ -1274,7 +1199,7 @@ def update_enemy_cars():
         key = id(car)
         if key in active_collision_effects:
             m, start_time = active_collision_effects[key]
-            if time.time() - start_time < COLLISION_EFFECT_TIME:
+            if time.time() - start_time < collission_effect_time:
                 multiplier = m
             else:
                 # Restore to normal speed after 5 seconds
@@ -1302,11 +1227,6 @@ def update_enemy_cars():
             car.position = list(goal)
             car.segment += 1
 
-
-
-
-
-
 colliding_enemies = set()
 def check_collision(player_pos, player_angle_deg, enemy_pos, car_length, car_width, tolerance=0):
     half_len = car_length / 2 + tolerance
@@ -1316,15 +1236,12 @@ def check_collision(player_pos, player_angle_deg, enemy_pos, car_length, car_wid
     px, py = player_pos
     ex, ey = enemy_pos
 
-
     # Convert angle to radians
     theta = math.radians(player_angle_deg)
-
 
     # Relative position vector from player to enemy
     dx = ex - px
     dy = ey - py
-
 
     # Rotate relative vector by -theta to align with player car axes
     rotated_x = dx * math.cos(-theta) - dy * math.sin(-theta)
@@ -1345,35 +1262,18 @@ def check_enemy_player_collision():
     collision = False
     for enemy in enemy_cars:
         enemy_pos = enemy.position[:2]
-        if check_collision(player_pos, player_angle, enemy_pos, CAR_LENGTH, CAR_WIDTH, tolerance=5):
+        if check_collision(player_pos, player_angle, enemy_pos, c_length, c_width, tolerance=5):
             collision = True
             colliding_enemies.add(enemy)
     if collision and not enemy_player_collision_flag:
         enemy_player_collision_flag = True
-        print('Collision detected!')
         enemy_player_collision_start_time = time.time()
         if not shield_active:
             lives -= 1
         return True
     return False
 
-
-
-
-
-
-# Add global dicts to track displacement accumulated during collision for player and each enemy car
-collision_displacement_accum = {
-    "player": 0.0,
-    "enemies": {id(enemy): 0.0 for enemy in enemy_cars}
-}
-MAX_COLLISION_DISPLACEMENT = 10.0  # max units total move during collision effect
-DISPLACEMENT_PER_FRAME = 0.3       # units moved per update frame
-
-
-COLLISION_SPEED_BOOST = 1.5   # multiplier for front car
-COLLISION_SPEED_PENALTY = -1.0 # multiplier for rear car
-COLLISION_EFFECT_TIME = 2.0   # seconds
+collission_effect_time = 2.0   # seconds
 active_collision_effects = set()
 # Track speed effects
 def apply_collision_response():
@@ -1381,7 +1281,7 @@ def apply_collision_response():
     if not enemy_player_collision_flag or not colliding_enemies:
         return
     now = time.time()
-    if now - enemy_player_collision_start_time > COLLISION_EFFECT_TIME:
+    if now - enemy_player_collision_start_time > collission_effect_time:
         enemy_player_collision_flag = False
         colliding_enemies.clear()
         active_collision_effects.clear()
@@ -1390,7 +1290,7 @@ def apply_collision_response():
     player_pos = np.array(car_pos[:2])
     player_angle_rad = math.radians(car_angle)
     player_forward = np.array([math.cos(player_angle_rad), math.sin(player_angle_rad)])
-    nudge_amt = max(CAR_LENGTH, CAR_WIDTH) + 10  # Large enough to prevent overlap
+    nudge_amt = max(c_length, c_width) + 10  # Large enough to prevent overlap
     for enemy in colliding_enemies:
         enemy_pos = np.array(enemy.position[:2])
         rel_vec = player_pos - enemy_pos
@@ -1403,9 +1303,6 @@ def apply_collision_response():
         car_pos[1] += sep_vec[1]
         enemy.position[0] -= sep_vec[0]
         enemy.position[1] -= sep_vec[1]
-
-
-
 
 def is_car_colliding():
     base_length = 2.5
@@ -1522,7 +1419,6 @@ def update_car():
                 if not shield_active:
                     lives = max(0, lives - 1)
 
-
         else:
             collision_flag = False
             current_speed = normal_speed
@@ -1542,7 +1438,7 @@ def update_car():
     multiplier = 1.0
     if "player" in active_collision_effects:
         m, start_time = active_collision_effects["player"]
-        if time.time() - start_time < COLLISION_EFFECT_TIME:
+        if time.time() - start_time < collission_effect_time:
             multiplier = m
         else:
             del active_collision_effects["player"]
@@ -1561,11 +1457,8 @@ def update_car():
     car_pos[0], car_pos[1] = new_x, new_y
 
 
-
-
     # Check collision going forward
     if is_car_colliding():
-            print("Collision detected! Life lost.")
             collision_flag = True
             collision_start_time = now
             car_pos = old_pos[:]
@@ -1581,29 +1474,22 @@ def update_car():
             finish_crossed = True
             
         elif result == "cheat":
-            cheat_message = "You cannot finish the race backwards! Game restarting..."
-            print(cheat_message)
+            cheat_message = "You cannot finish the race backwards!"
             reset_game()
             
-
-
     prev_car_pos = car_pos[:]
     glutPostRedisplay()
 
-
-
-
-
-
 def reset_game():
-    global car_pos, car_angle, finish_crossed, current_speed, collision_flag, lives
+    global car_pos, car_angle, finish_crossed, current_speed, collision_flag, lives, enemy_cars, enemy_win, cheat_message
+    
     car_pos = [0, -600, 10]
     car_angle = 0.0
     finish_crossed = False
     current_speed = normal_speed
     collision_flag = False
     lives = 10
-    global enemy_cars, enemy_win
+    
     # Reset enemy cars to initial segment/position, and reset angles properly
     for ecar in enemy_cars:
         ecar.position = list(ecar.path_points[0])
@@ -1615,13 +1501,22 @@ def reset_game():
         else:
             ecar.angle = 0
         ecar.finished = False
+    
     enemy_win = False
     spawn_shield_kits()
+
+    # === Clear cheat_message after 5 seconds ===
+    def clear_cheat():
+        global cheat_message
+        cheat_message = ""
+        glutPostRedisplay()
+
+    threading.Timer(5.0, clear_cheat).start()
+
     glutPostRedisplay()
 
-
 def keyboard(key, x, y):
-    global current_speed, car_angle, boost_active, boost_start_time, paused
+    global current_speed, car_angle, boost_active, boost_start_time, paused, fpv, gun_follow
     global shield_active, shield_start_time  # Add shield variables
     key_lower = key.lower()
     
@@ -1639,12 +1534,13 @@ def keyboard(key, x, y):
         car_angle += turn_speed
     elif key_lower == b'd':  # turn right
         car_angle -= turn_speed
-  
+    elif key_lower == b'g' and fpv:
+        gun_follow = not gun_follow
+
 
 # === Controls ===
 def special_keyboard(key, x, y):
     global current_speed, car_angle, boost_active, boost_start_time, gun_angle
-
 
     if key == GLUT_KEY_UP and not collision_flag:
         fire_bullet()  # UP arrow fires bullet
@@ -1656,30 +1552,176 @@ def special_keyboard(key, x, y):
         gun_angle -= gun_turn_speed  # rotate gun right
 
 
-
-
 def mouse_click(button, state, x, y):
+    global fpv
     if button == GLUT_LEFT_BUTTON and state == GLUT_DOWN:
         fire_bullet()
+    if button == GLUT_RIGHT_BUTTON and state == GLUT_DOWN:
+        fpv = not fpv
 
 
 def setupCamera():
+    global fpv, car_angle, gun_angle
+
     glMatrixMode(GL_PROJECTION)
     glLoadIdentity()
     gluPerspective(fovY, 1.25, 1.0, 2000)
+
     glMatrixMode(GL_MODELVIEW)
     glLoadIdentity()
     x, y, z = car_pos
-    # Correct offset calculations!
-    offset_distance = math.sqrt(camera_offset[0] ** 2 + camera_offset[1] ** 2)
-    offset_angle = math.atan2(camera_offset[1], camera_offset[0])
-    total_angle = math.radians(car_angle) + offset_angle
-    camera_x = x + offset_distance * math.cos(total_angle)
-    camera_y = y + offset_distance * math.sin(total_angle)
-    camera_z = z + camera_offset[2] 
-    gluLookAt(camera_x, camera_y, camera_z, x, y, z, 0, 0, 1)
 
+    if fpv:
+        if not gun_follow:
+            # ---------- FPV MODE ----------
+            eye_height = 40   # Slightly above car’s base
+            eye_forward = -20  # Forward from the car center
 
+            # Camera (eye) position -> exactly at car center, not right-shifted
+            eye_x = x - eye_forward * math.sin(math.radians(car_angle))
+            eye_y = y + eye_forward * math.cos(math.radians(car_angle))
+            eye_z = z + eye_height
+
+            # Look direction = car_angle + gun_angle
+            total_angle = math.radians(car_angle  + 90)
+            look_dist = 200.0
+            center_x = eye_x + look_dist * math.cos(total_angle)
+            center_y = eye_y + look_dist * math.sin(total_angle)
+            center_z = eye_z
+
+            gluLookAt(eye_x, eye_y, eye_z,
+                    center_x, center_y, center_z,
+                    0, 0, 1)
+        else:
+            # ---------- FPV MODE ----------
+            eye_height = 40   # Slightly above car’s base
+            eye_forward = 0  # Forward from the car center
+
+            # Camera (eye) position -> exactly at car center, not right-shifted
+            eye_x = x - eye_forward * math.sin(math.radians(car_angle))
+            eye_y = y + eye_forward * math.cos(math.radians(car_angle))
+            eye_z = z + eye_height
+
+            # Look direction = car_angle + gun_angle
+            total_angle = math.radians(car_angle + gun_angle - 90)
+            look_dist = 200.0
+            center_x = eye_x + look_dist * math.cos(total_angle)
+            center_y = eye_y + look_dist * math.sin(total_angle)
+            center_z = eye_z
+
+            gluLookAt(eye_x, eye_y, eye_z,
+                    center_x, center_y, center_z,
+                    0, 0, 1)
+
+    else:
+        # ---------- THIRD PERSON MODE ----------
+        offset_distance = math.sqrt(camera_offset[0] ** 2 + camera_offset[1] ** 2)
+        offset_angle = math.atan2(camera_offset[1], camera_offset[0])
+        total_angle = math.radians(car_angle) + offset_angle
+        camera_x = x + offset_distance * math.cos(total_angle)
+        camera_y = y + offset_distance * math.sin(total_angle)
+        camera_z = z + camera_offset[2]
+
+        gluLookAt(camera_x, camera_y, camera_z,
+                  x, y, z,
+                  0, 0, 1)
+
+def draw_background():
+    # Disable depth test so background is always behind
+    glDisable(GL_DEPTH_TEST)
+
+    # Save projection matrix and set orthographic for background quad covering screen
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    glOrtho(0, 1000, 0, 800, -1, 1)  # match window size and simple orthogonal projection
+
+    # Reset modelview matrix
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+
+    # Calculate sky height based on view mode
+    if fpv:
+        # FPV mode: sky covers top 30% of screen (top 240 pixels)
+        sky_start_y = 560  # 70% of 800
+    else:
+        # Third person: sky covers top 10% of screen (top 80 pixels)
+        sky_start_y = 720  # 90% of 800
+
+    # Draw sky (conditional height)
+    glBegin(GL_QUADS)
+    glColor3f(0.53, 0.81, 0.98)  # Light blue sky
+    glVertex2f(0, sky_start_y)
+    glVertex2f(1000, sky_start_y)
+    glVertex2f(1000, 800)
+    glVertex2f(0, 800)
+    glEnd()
+
+    # Draw the remaining part as ground (green)
+    glBegin(GL_QUADS)
+    glColor3f(0.0, 0.4, 0.0)  # Green grass
+    glVertex2f(0, 0)
+    glVertex2f(1000, 0)
+    glVertex2f(1000, sky_start_y)
+    glVertex2f(0, sky_start_y)
+    glEnd()
+
+    # Restore modelview and projection matrices
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+
+    # Re-enable depth test for other objects
+    glEnable(GL_DEPTH_TEST)
+
+def draw_cylinder(radius, height, slices=16, stacks=1):
+    quadric = gluNewQuadric()
+    gluQuadricNormals(quadric, GLU_SMOOTH)
+    gluCylinder(quadric, radius, radius, height, slices, stacks)
+    gluDeleteQuadric(quadric)
+
+def draw_cone(base_radius, height, slices=16, stacks=1):
+    quadric = gluNewQuadric()
+    gluQuadricNormals(quadric, GLU_SMOOTH)
+    gluCylinder(quadric, base_radius, 0, height, slices, stacks)
+    gluDeleteQuadric(quadric)
+
+def draw_tree(x, y, z=0):
+    glPushMatrix()
+    glTranslatef(x, y, z)
+
+    depth_offset = 10  # For some thickness if desired (optional)
+
+    # Draw rough trunk - Cylinder with brown color
+    glColor3f(0.6, 0.3, 0.1)
+    glPushMatrix()
+    # Rotate if necessary to align with Z axis up
+    # Cylinders are drawn along Z axis by default
+    draw_cylinder(radius=10, height=60)
+    glPopMatrix()
+
+    # Draw cone leaves: 3 stacked cones with different sizes and colors
+    glColor3f(0.0, 0.5, 0.0)  # Dark green
+    glPushMatrix()
+    glTranslatef(0, 0, 60)
+    draw_cone(base_radius=40, height=60)
+    glPopMatrix()
+
+    glColor3f(0.0, 0.7, 0.0)  # Medium green
+    glPushMatrix()
+    glTranslatef(0, 0, 90)
+    draw_cone(base_radius=35, height=60)
+    glPopMatrix()
+
+    glColor3f(0.0, 0.3, 0.0)  # Darker green
+    glPushMatrix()
+    glTranslatef(0, 0, 120)
+    draw_cone(base_radius=30, height=60)
+    glPopMatrix()
+
+    glPopMatrix()
 
 
 def showScreen():
@@ -1688,31 +1730,49 @@ def showScreen():
     
     # --- Main viewport (full window) ---
     glViewport(0, 0, 1000, 800)
+    
     setupCamera()
+    draw_background()
+    for (tx, ty) in tree_positions:
+        draw_tree(tx, ty, 0)  # z=0 as ground level
     draw_road()
     draw_all_speed_breakers()   
     draw_bullets()
+
     if finish_line_pos:
         draw_finish_line(finish_line_pos[0], finish_line_pos[1], finish_line_angle)
-    if cheat_message:
-        draw_text(300, 360, cheat_message)
-    if enemy_win:
-        draw_text(350, 450, "Game Over! Enemy finished first.")
-
-
-
 
     draw_player_car(car_pos[0], car_pos[1], car_pos[2], car_angle, gun_angle)
     for ecar in enemy_cars:
         draw_enemy_car(ecar.position[0], ecar.position[1], ecar.position[2], ecar.angle)
-    if finish_crossed:
-        draw_text(400, 400, "Congratulations! You finished the race!")
-    if lives <= 0:
-        draw_text(450, 400, "Game Over! No lives remaining.")
-
+    if not fpv:
+        # === Top of screen ===
+        if cheat_message:
+            draw_text(350, 680, cheat_message)
+  
+        if enemy_win:
+            draw_text(350, 680, "Game Over! Enemy finished first.")
+        if finish_crossed:
+            draw_text(350, 680, "Congratulations! You finished the race!")
+        if lives <= 0:
+            draw_text(350, 680, "Game Over! No lives remaining.")
+    else:
+        # === Bottom of screen (FPV mode) ===
+        base_y = 30  # small margin from bottom
+        if cheat_message:
+            draw_text(350, base_y, cheat_message)
+            reset_game()
+            base_y += 25
+        if enemy_win:
+            draw_text(350, base_y, "Game Over! Enemy finished first.")
+            base_y += 25
+        if finish_crossed:
+            draw_text(350, base_y, "Congratulations! You finished the race!")
+            base_y += 25
+        if lives <= 0:
+            draw_text(350, base_y, "Game Over! No lives remaining.")
 
     global kits_spawned
-
 
     if not kits_spawned:
        spawn_health_kits()
@@ -1730,18 +1790,18 @@ def showScreen():
         draw_shield_kit(sx, sy, 20)
     draw_all_explosions()
     
-    draw_dashboard()  
+    draw_dashboard() 
     
     # --- Mini viewport (top-right corner) ---
-    mini_width, mini_height = 200, 200
-    glViewport(1000 - mini_width - 20, 800 - mini_height - 20, mini_width, mini_height)
+    mini_width, mini_height = 250, 250
+    glViewport(1000 - mini_width + 10, 800 - mini_height + 30, mini_width, mini_height)  
 
 
     # Save current matrices
     glMatrixMode(GL_PROJECTION)
     glPushMatrix()
     glLoadIdentity()
-    glOrtho(-3000, 3000, -3000, 3000, -1000, 1000)  # Adjust bounds to cover map
+    glOrtho(-6000, 6000, -6000, 6000, -1200, 1200)
 
 
     glMatrixMode(GL_MODELVIEW)
@@ -1753,7 +1813,7 @@ def showScreen():
 
 
     # Top-down camera
-    gluLookAt(car_pos[0], car_pos[1], 1000,
+    gluLookAt(car_pos[0], car_pos[1], 1200,
               car_pos[0], car_pos[1], 0,
               0, 1, 0)
 
@@ -1770,10 +1830,9 @@ def showScreen():
         draw_enemy_car(ecar.position[0], ecar.position[1], ecar.position[2], ecar.angle)
 
 
-
-
     # Draw a red dot at car position to make it more visible on minimap
         # Draw a light skyblue dot for the player car
+    glDisable(GL_DEPTH_TEST)
     glColor3f(0.53, 0.81, 0.98)  # Light skyblue
     dot_size = 50
     glBegin(GL_QUADS)
@@ -1794,9 +1853,7 @@ def showScreen():
         glVertex2f(ex + dot_size, ey + dot_size)
         glVertex2f(ex - dot_size, ey + dot_size)
         glEnd()
-
-
-
+    glDisable(GL_DEPTH_TEST)
 
     # Restore matrices
     glPopMatrix()
@@ -1810,20 +1867,48 @@ def showScreen():
 
 
     glutSwapBuffers()
+def is_position_on_road(x, y):
 
+    for rx, ry in road_positions:
+        if (x - rx)**2 + (y - ry)**2 < 10000:  # 100 units radius squared
+            return True
+    return False
+
+def generate_tree_positions(num_trees):
+    global tree_positions
+    tree_positions = []
+    # Define bounds for positioning (example values)
+    min_x, max_x = -6000, 6000
+    min_y, max_y = -6000, 6000
+
+    while len(tree_positions) < num_trees:
+        x = random.uniform(min_x, max_x)
+        y = random.uniform(min_y, max_y)
+        if not is_position_on_road(x, y):
+            tree_positions.append((x, y))
 
 def draw_dashboard():
+    # Disable depth so HUD always stays on top
+    glDisable(GL_DEPTH_TEST)
+
     glMatrixMode(GL_PROJECTION)
     glPushMatrix()
     glLoadIdentity()
     gluOrtho2D(0, 1000, 0, 700)
+
     glMatrixMode(GL_MODELVIEW)
     glPushMatrix()
     glLoadIdentity()
+
     
     # === Panel geometry ===
-    x0, y0 = 10, 10
-    x1, y1 = 480, 230   # wider to fit text & bars comfortably
+    if fpv:  # First-person view → move to top-left
+        panel_width, panel_height = 470, 220
+        x0, y0 = 10, 700 - panel_height - 10
+        x1, y1 = x0 + panel_width, y0 + panel_height
+    else:    # Default → bottom-left
+        x0, y0 = 10, 10
+        x1, y1 = 480, 230   # same size as before
     
     # Background
     glColor4f(0.1, 0.1, 0.1, 0.8)
@@ -1933,7 +2018,7 @@ def draw_dashboard():
     life_bar_thickness = 5
     life_bar_spacing = 3
     
-    # === Enemy lives rows (below the player text, just above player bars) ===
+    #Enemy lives rows
     enemy_max_lives = 4
     enemy_row_start_y = player_bar_y + 16  # slightly above player bars
 
@@ -1969,16 +2054,16 @@ def draw_dashboard():
     glMatrixMode(GL_PROJECTION)
     glPopMatrix()
     glMatrixMode(GL_MODELVIEW)
-
-
+    glEnable(GL_DEPTH_TEST)
 
 
 def main():
-    glutInit(sys.argv)
+    glutInit()
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH)
     glutInitWindowSize(1000, 800)
     glutInitWindowPosition(0, 0)
     glutCreateWindow(b"3dCarRush")
+    glEnable(GL_DEPTH_TEST)
     glutSpecialFunc(special_keyboard)
     glutKeyboardFunc(keyboard)
     glClearColor(0.0, 0.4, 0.0, 1.0)
@@ -1988,22 +2073,17 @@ def main():
     global selected_layout
     layouts = [layout1, layout2, layout3]
     selected_layout = random.choice(layouts)
-
-
-    layout_index = layouts.index(selected_layout) + 1
-  
+    layout_index = layouts.index(selected_layout) + 1  
     selected_layout()
     paths = get_enemy_paths_for_layout(layout_index)
-    enemy_speeds = [random.uniform(12, 18) for i in range(ENEMY_COUNT)]  # Each enemy has different speed
+    enemy_speeds = [random.uniform(12, 22) for i in range(enemy_num)]  # Each enemy has different speed
     global enemy_cars
     enemy_cars = [EnemyCar((0.9, 0.3, 0.3), path, speed) for path, speed in zip(paths, enemy_speeds)]
     spawn_health_kits()
     spawn_shield_kits()
+    generate_tree_positions(50)  # Generate 50 trees outside road
     glutMainLoop()
 
 
 if __name__ == "__main__":
     main()
-
-
-
