@@ -2073,7 +2073,7 @@ def main():
     global selected_layout
     layouts = [layout1, layout2, layout3]
     selected_layout = random.choice(layouts)
-    layout_index = layouts.index(selected_layout) + 1  
+    layout_index = layouts.index(selected_layout) + 1
     selected_layout()
     paths = get_enemy_paths_for_layout(layout_index)
     enemy_speeds = [random.uniform(12, 22) for i in range(enemy_num)]  # Each enemy has different speed
