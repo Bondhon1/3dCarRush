@@ -64,6 +64,7 @@ class Game:
         self.bump_cd = 0.0             # cooldown so one rival hit costs one life
         self.wall_cd = 0.0             # cooldown so one wall crash costs one life
         self._last_count = None        # last countdown value we beeped for
+        self._last_update = None        # wall-clock of the previous update tick
 
     # ------------------------------------------------------------------ setup
     def start_race(self, layout_id):
@@ -89,6 +90,7 @@ class Game:
         self.countdown_start = time.time()
         self.state = COUNTDOWN
         self._last_count = None
+        self._last_update = None        # fresh frame-clock for the new race
         audio.start_music()
         audio.start_engine()
         audio.set_engine(0.2)
@@ -216,6 +218,17 @@ class Game:
     # ------------------------------------------------------------------ update
     def update(self):
         now = time.time()
+        # Frame-scale: how many 60-FPS frames this tick represents.  Multiplying
+        # all motion by it decouples game speed from render/update rate, so the
+        # car covers the same distance per second on every PC and every track
+        # (fixes the "over-sped on some tracks" render-rate coupling).  Clamped
+        # so a lag spike can't teleport a car through a wall.
+        if self._last_update is None:
+            fs = 1.0
+        else:
+            fs = max(0.25, min(2.0, (now - self._last_update) * C.TARGET_FPS))
+        self._last_update = now
+
         if self.state == COUNTDOWN:
             # rivals idle on the grid until the flag drops
             cv = self.countdown_value()
@@ -238,25 +251,27 @@ class Game:
         if p.shield_active and now - p.shield_start > C.SHIELD_DURATION:
             p.shield_active = False
 
-        # steering (held keys)
+        # steering (held keys) -- scaled by frame time
         if self.turn_left:
-            p.angle += C.TURN_SPEED
+            p.angle += C.TURN_SPEED * fs
         if self.turn_right:
-            p.angle -= C.TURN_SPEED
+            p.angle -= C.TURN_SPEED * fs
         if self.gun_left:
-            p.gun_angle += C.GUN_TURN_SPEED
+            p.gun_angle += C.GUN_TURN_SPEED * fs
         if self.gun_right:
-            p.gun_angle -= C.GUN_TURN_SPEED
+            p.gun_angle -= C.GUN_TURN_SPEED * fs
 
         self._update_jump(now)
 
-        # forward motion
+        # forward motion: ease toward the target speed for a smooth ramp instead
+        # of snapping (matched accel/decel gives every input the same feel)
         if p.boost_active:
-            p.speed = C.BOOST_SPEED
+            target_speed = C.BOOST_SPEED
         elif self.brake:
-            p.speed = C.SLOW_SPEED
+            target_speed = C.SLOW_SPEED
         else:
-            p.speed = C.NORMAL_SPEED
+            target_speed = C.NORMAL_SPEED
+        p.speed += (target_speed - p.speed) * min(1.0, C.SPEED_LERP * fs)
 
         # engine note tracks throttle; boost adds a whoosh
         audio.set_engine(p.speed / C.BOOST_SPEED)
@@ -266,8 +281,8 @@ class Game:
         a = math.radians(p.angle)
         fx, fy = math.cos(a), math.sin(a)
         old = list(p.pos)
-        p.pos[0] += p.speed * fx
-        p.pos[1] += p.speed * fy
+        p.pos[0] += p.speed * fs * fx
+        p.pos[1] += p.speed * fs * fy
 
         if not protected and self._car_hits_wall(p.pos[0], p.pos[1], p.angle):
             p.pos = old                       # blocked by the wall
@@ -283,7 +298,7 @@ class Game:
         for e in self.enemies:
             if e.lives <= 0:
                 e.respawn()
-            e.update()
+            e.update(fs)
             # rivals track and shoot the player when tailgated too closely
             shot = e.aim_and_maybe_fire(p, now)
             if shot is not None:
@@ -301,7 +316,7 @@ class Game:
             self._enemy_player_collisions()
             self._pickup_and_hazards(now)
 
-        self._update_bullets()
+        self._update_bullets(fs)
 
         # finish line
         self._check_finish(fx, fy)
@@ -462,13 +477,13 @@ class Game:
                                 self._lose()
                     break
 
-    def _update_bullets(self):
+    def _update_bullets(self, fs=1.0):
         alive = []
         now = time.time()
         p = self.player
         protected = now < self.spawn_protect_until
         for b in list(self.bullets):
-            b.advance()
+            b.advance(fs)
             if b.team == "player":
                 hit = None
                 for e in self.enemies:

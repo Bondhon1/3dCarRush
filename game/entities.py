@@ -170,62 +170,55 @@ class Enemy:
         else:
             self.angle = 90.0
 
-    def _steer_target(self):
-        """Aim a little past the next waypoint so corners are rounded, not
-        clipped 90-degree pivots.  Blends the current leg with the next one as
-        the car nears the corner, which is what removes the 'robotic' feel."""
-        i = self.segment
-        goal = self.path[i + 1]
-        dx, dy = goal[0] - self.pos[0], goal[1] - self.pos[1]
-        dist = math.hypot(dx, dy)
-        # within a corner-radius of the waypoint, start blending toward the
-        # following leg's direction so the heading eases through the turn
-        if i + 2 < len(self.path) and dist < 260:
-            nxt = self.path[i + 2]
-            blend = 1.0 - (dist / 260.0)          # 0 far -> 1 at the corner
-            ndx, ndy = nxt[0] - goal[0], nxt[1] - goal[1]
-            nd = math.hypot(ndx, ndy) or 1.0
-            gx = dx / (dist or 1.0) * (1 - blend) + ndx / nd * blend
-            gy = dy / (dist or 1.0) * (1 - blend) + ndy / nd * blend
-            return math.atan2(gy, gx), dist
-        return math.atan2(dy, dx), dist
+    def update(self, fs=1.0):
+        """Advance along the waypoint path.
 
-    def update(self):
+        ``fs`` is the engine's frame-scale (1.0 == 60 FPS) so rivals cover the
+        same ground per second on any machine.  The follower is deliberately
+        robust: it steers toward the *current* waypoint (never a blended point
+        that could aim backward) and advances as soon as it reaches OR drives
+        past a waypoint -- so a car can no longer orbit a corner it can't quite
+        hit, which is what made them spin in place and double back."""
         if self.finished or self.segment >= len(self.path) - 1:
             self.bank *= 0.85
             return
+
         goal = self.path[self.segment + 1]
-        target, dist = self._steer_target()
-        if dist == 0:
+        dx, dy = goal[0] - self.pos[0], goal[1] - self.pos[1]
+        dist = math.hypot(dx, dy)
+        hd = math.radians(self.angle)
+        hx, hy = math.cos(hd), math.sin(hd)
+
+        # reached, or overshot past the waypoint's plane -> take the next leg
+        accept = max(70.0, self.speed * 6.0)
+        if dist < accept or (dist < 260 and (dx * hx + dy * hy) < 0):
             self.segment += 1
-            return
+            if self.segment >= len(self.path) - 1:
+                return
+            goal = self.path[self.segment + 1]
+            dx, dy = goal[0] - self.pos[0], goal[1] - self.pos[1]
+            dist = math.hypot(dx, dy) or 1.0
 
-        cur = math.radians(self.angle)
-        diff = ((target - cur + math.pi) % (2 * math.pi)) - math.pi
-        # capped, proportional steering: big errors turn near the cap, small
-        # ones ease in -- smooth arcs instead of instant snaps
-        max_turn = math.radians(C.ENEMY_MAX_TURN)
-        step = max(-max_turn, min(max_turn, diff * 0.35))
-        cur += step
-        self.angle = math.degrees(cur)
+        # eased, capped steering toward the waypoint -> smooth arcs, but the cap
+        # is high enough (and the car slows below) to actually round 90s
+        target = math.atan2(dy, dx)
+        diff = ((target - hd + math.pi) % (2 * math.pi)) - math.pi
+        max_turn = math.radians(C.ENEMY_MAX_TURN) * fs
+        step = max(-max_turn, min(max_turn, diff * 0.5))
+        self.angle = math.degrees(hd + step)
 
-        # bank into the corner proportional to how hard we're steering
-        target_bank = max(-16.0, min(16.0, -math.degrees(step) * 4.5))
-        self.bank += (target_bank - self.bank) * 0.18
+        # lean into the turn (roll rate is per-frame, so divide fs back out)
+        target_bank = max(-16.0, min(16.0, -math.degrees(step / max(fs, 1e-3)) * 4.5))
+        self.bank += (target_bank - self.bank) * min(1.0, 0.18 * fs)
 
-        # slow for sharp corners so the racing line reads as deliberate driving
-        spd = self.speed
-        corner = min(1.0, abs(diff) / (math.pi / 2))
-        spd *= 1.0 - (1.0 - C.ENEMY_CORNER_SLOWDOWN) * corner
+        # slow proportionally to the heading error -> a believable racing line
+        err = min(1.0, abs(diff) / (math.pi / 2))
+        spd = self.speed * (1.0 - (1.0 - C.ENEMY_CORNER_SLOWDOWN) * err)
         if time.time() < self.slow_until:
             spd *= 0.45
-
-        heading = (math.cos(cur), math.sin(cur))
-        self.pos[0] += spd * heading[0]
-        self.pos[1] += spd * heading[1]
-
-        if math.hypot(goal[0] - self.pos[0], goal[1] - self.pos[1]) < spd + 2:
-            self.segment += 1
+        a = math.radians(self.angle)
+        self.pos[0] += spd * fs * math.cos(a)
+        self.pos[1] += spd * fs * math.sin(a)
 
     def aim_and_maybe_fire(self, player, now):
         """Track the player with the turret; return a Bullet if it fires.
@@ -294,10 +287,10 @@ class Bullet:
     def speed(self):
         return C.BULLET_SPEED if self.team == "player" else C.ENEMY_BULLET_SPEED
 
-    def advance(self):
+    def advance(self, fs=1.0):
         a = math.radians(self.angle)
-        self.x += self.speed() * math.cos(a)
-        self.y += self.speed() * math.sin(a)
+        self.x += self.speed() * fs * math.cos(a)
+        self.y += self.speed() * fs * math.sin(a)
 
 
 def draw_bullets(bullets):

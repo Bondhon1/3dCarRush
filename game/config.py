@@ -32,18 +32,25 @@ CAR_GROUND_Z = 12.0            # resting height of the chassis centre
 # ---------------------------------------------------------------------------
 # Movement
 # ---------------------------------------------------------------------------
-NORMAL_SPEED = 5.0
-BOOST_SPEED = 10.0
-SLOW_SPEED = 2.0
-TURN_SPEED = 1.2               # degrees per frame while turning
+# NOTE ON UNITS:  every speed / turn value below is expressed in "units per
+# frame at 60 FPS".  The engine now multiplies all motion by a measured
+# frame-scale (dt * 60), so the *distance travelled per second* is identical on
+# a slow PC and a fast one -- no more tracks that feel over- or under-sped.
+NORMAL_SPEED = 6.6             # cruise pace (raised: the old 5.0 felt sluggish)
+BOOST_SPEED = 11.5             # top speed while boosting
+SLOW_SPEED = 3.0              # while braking
+TURN_SPEED = 1.9               # degrees per frame while turning
 BOOST_DURATION = 3.0
+# How quickly the car eases toward its target speed (per 60fps frame, 0..1).
+# Gives a smooth accelerate/decelerate ramp instead of an instant snap.
+SPEED_LERP = 0.10
 
-# Enemy pace (difficulty). Rivals now push harder than the player's cruise
-# speed, so you must use boost, kits and gunfire to stay ahead.
-ENEMY_SPEED_MIN = 7.2
-ENEMY_SPEED_MAX = 8.8
-ENEMY_MAX_TURN = 3.2           # deg/frame cap -> smooth, non-robotic cornering
-ENEMY_CORNER_SLOWDOWN = 0.55   # fraction of speed kept mid-corner
+# Enemy pace (difficulty). Rivals push a touch harder than the player's cruise
+# so you must use boost, kits and gunfire to stay ahead.
+ENEMY_SPEED_MIN = 7.0
+ENEMY_SPEED_MAX = 8.4
+ENEMY_MAX_TURN = 4.6           # deg/frame cap -> smooth but corners are makeable
+ENEMY_CORNER_SLOWDOWN = 0.5    # fraction of speed kept mid-corner
 
 # ---------------------------------------------------------------------------
 # Camera
