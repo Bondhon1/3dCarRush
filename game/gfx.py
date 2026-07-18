@@ -152,8 +152,12 @@ def capped_cylinder(radius, height, slices=20):
 # ---------------------------------------------------------------------------
 # Atmosphere: gradient sky + ground plane
 # ---------------------------------------------------------------------------
-def draw_sky(width, height, horizon_frac=0.55):
-    """Full-screen vertical gradient drawn behind everything else."""
+def draw_sky(width, height, horizon_frac=0.55, yaw=0.0):
+    """Full-screen vertical gradient drawn behind everything else.
+
+    ``yaw`` (the camera heading, degrees) scrolls the sun and clouds like a
+    distant panorama so they parallax as you turn instead of feeling painted on.
+    """
     glDisable(GL_DEPTH_TEST)
     glDisable(GL_LIGHTING)
     glDisable(GL_FOG)
@@ -180,14 +184,26 @@ def draw_sky(width, height, horizon_frac=0.55):
     glColor3f(*fog);  glVertex2f(width, 0);    glVertex2f(0, 0)
     glEnd()
 
-    # low sun glow near the horizon (left side, clear of the minimap)
-    sun_x, sun_y = width * 0.26, hy + height * 0.08
-    _radial(sun_x, sun_y, height * 0.17, (1.0, 0.82, 0.5, 0.5), (1.0, 0.82, 0.5, 0.0))
-    _radial(sun_x, sun_y, height * 0.05, (1.0, 0.97, 0.86, 0.95), (1.0, 0.95, 0.8, 0.0))
+    # panorama scroll: one full car rotation scrolls the sky twice across
+    period = width * 2.0
+    shift = ((yaw % 360.0) / 360.0) * period
 
-    # a few soft, subtle clouds
-    for cxf, cyf, s in ((0.52, 0.9, 0.9), (0.78, 0.84, 0.7)):
-        _cloud(width * cxf, height * cyf, height * 0.045 * s)
+    # low sun glow near the horizon, scrolling with the view
+    sun_y = hy + height * 0.08
+    sun_x = (width * 0.55 - shift) % period
+    for sxp in (sun_x, sun_x - period, sun_x + period):
+        if -height < sxp < width + height:
+            _radial(sxp, sun_y, height * 0.17, (1.0, 0.82, 0.5, 0.5), (1.0, 0.82, 0.5, 0.0))
+            _radial(sxp, sun_y, height * 0.05, (1.0, 0.97, 0.86, 0.95), (1.0, 0.95, 0.8, 0.0))
+
+    # soft clouds spread around the whole panorama so turning reveals new ones
+    for cxf, cyf, s in ((0.10, 0.86, 0.9), (0.42, 0.9, 0.7), (0.78, 0.84, 0.85),
+                        (1.15, 0.88, 0.8), (1.6, 0.82, 0.7)):
+        base = width * cxf
+        cx = (base - shift) % period
+        for cxp in (cx, cx - period, cx + period):
+            if -220 < cxp < width + 220:
+                _cloud(cxp, height * cyf, height * 0.045 * s)
 
     glPopMatrix()
     glMatrixMode(GL_PROJECTION)

@@ -75,6 +75,11 @@ class Game:
         self.checkpoint = max(base, key=lambda w: (w[0] - fx) ** 2 + (w[1] - fy) ** 2)
         self.checkpoint_reached = False
         self.lap_waypoints = [(w[0], w[1]) for w in base]
+        # correct finish-crossing direction = the racing line's final heading
+        lx, ly = self.lap_waypoints[-1]
+        qx, qy = self.lap_waypoints[-2]
+        dd = math.hypot(lx - qx, ly - qy) or 1.0
+        self.finish_dir = ((lx - qx) / dd, (ly - qy) / dd)
         self.spawn_protect_until = time.time() + COUNTDOWN_TIME + 1.0
         self.countdown_start = time.time()
         self.state = COUNTDOWN
@@ -243,6 +248,7 @@ class Game:
                 e.finished = True
                 if not p.finished:
                     self.state = ENEMY_WIN
+        self._enemy_hazards(now)
         if not protected:
             self._enemy_player_collisions()
             self._pickup_and_hazards(now)
@@ -302,6 +308,37 @@ class Game:
                     self.bump_cd = now + 1.0
                     if p.lives <= 0:
                         self.state = LOSE
+
+    def _enemy_hazards(self, now):
+        """Keep rivals from clipping into each other and let them jump humps."""
+        E = self.enemies
+        # pairwise separation
+        for i in range(len(E)):
+            for j in range(i + 1, len(E)):
+                a, b = E[i], E[j]
+                dx, dy = b.pos[0] - a.pos[0], b.pos[1] - a.pos[1]
+                d = math.hypot(dx, dy)
+                if 0 < d < C.CAR_LENGTH:
+                    push = (C.CAR_LENGTH - d) / 2 + 1
+                    nx, ny = dx / d, dy / d
+                    a.pos[0] -= nx * push; a.pos[1] -= ny * push
+                    b.pos[0] += nx * push; b.pos[1] += ny * push
+        # speed-breaker jumps (so rivals arc over the hump instead of clipping)
+        for e in E:
+            if not e.jump_active:
+                for (sx, sy, w, d) in self.track.speed_breakers:
+                    if abs(e.pos[0] - sx) <= w / 2 and abs(e.pos[1] - sy) <= d / 2:
+                        e.jump_active = True
+                        e.jump_start = now
+                        break
+            if e.jump_active:
+                t = now - e.jump_start
+                if t >= C.JUMP_DURATION:
+                    e.jump_active = False
+                    e.pos[2] = C.CAR_GROUND_Z
+                else:
+                    prog = t / C.JUMP_DURATION
+                    e.pos[2] = C.CAR_GROUND_Z + 4 * C.JUMP_HEIGHT_MAX * prog * (1 - prog)
 
     def _pickup_and_hazards(self, now):
         p = self.player
@@ -391,11 +428,13 @@ class Game:
             return
         if not self.checkpoint_reached:
             return                            # haven't run the lap yet
-        if fy < -0.2:                         # crossing heading -Y (correct dir)
+        # dot the heading with the racing line's finish direction
+        heading_dot = fx * self.finish_dir[0] + fy * self.finish_dir[1]
+        if heading_dot > 0.3:                 # crossing the correct way
             p.finished = True
             self.state = WIN
-        elif fy > 0.2 and time.time() >= self.breaker_cd:
-            self.flash("WRONG WAY - complete the lap!", 1.5)
+        elif heading_dot < -0.3 and time.time() >= self.breaker_cd:
+            self.flash("WRONG WAY - turn around!", 1.5)
 
     def fire(self):
         if self.state != PLAYING:
@@ -436,7 +475,8 @@ class Game:
 
     def display(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        gfx.draw_sky(self.width, self.height)
+        yaw = (time.time() * 4.0) if self.state == MENU else self.player.angle
+        gfx.draw_sky(self.width, self.height, yaw=yaw)
         if self.state == MENU:
             hud.draw_menu(self)
             glutSwapBuffers()
