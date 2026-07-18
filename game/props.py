@@ -140,6 +140,55 @@ def draw_speed_breaker(x, y, width=400, depth=150, height=34):
 
 
 # ---------------------------------------------------------------------------
+# Ground shadow blob beneath a car
+# ---------------------------------------------------------------------------
+def draw_car_shadow(pos, angle):
+    gfx.lighting(False)
+    glDepthMask(GL_FALSE)                 # don't let the shadow occlude itself
+    glPushMatrix()
+    glTranslatef(pos[0], pos[1], 0.3)
+    glRotatef(angle, 0, 0, 1)
+    hl = C.CAR_LENGTH * 0.62
+    hw = C.CAR_WIDTH * 0.72
+    glColor4f(0.0, 0.0, 0.0, 0.32)
+    glBegin(GL_TRIANGLE_FAN)
+    glVertex2f(0, 0)
+    seg = 16
+    for i in range(seg + 1):
+        t = i / seg * 2 * math.pi
+        glVertex2f(hl * math.cos(t), hw * math.sin(t))
+    glEnd()
+    glPopMatrix()
+    glDepthMask(GL_TRUE)
+    gfx.lighting(True)
+
+
+# ---------------------------------------------------------------------------
+# Boost exhaust flames (drawn behind the player car while boosting)
+# ---------------------------------------------------------------------------
+def draw_boost_flames(pos, angle):
+    S = C.CAR_SCALE
+    flick = 1.0 + 0.35 * math.sin(time.time() * 40)
+    gfx.lighting(False)
+    glPushMatrix()
+    glTranslatef(pos[0], pos[1], pos[2])
+    glRotatef(angle, 0, 0, 1)
+    for fy in (0.55 * S, -0.55 * S):
+        glPushMatrix()
+        glTranslatef(-2.3 * S, fy, 0.1 * S)
+        glRotatef(-90, 0, 1, 0)           # point the cone backward (-X)
+        # outer orange flame
+        glColor4f(1.0, 0.45, 0.08, 0.85)
+        gfx.cone(0.22 * S, 1.1 * S * flick, 10)
+        # inner yellow core
+        glColor4f(1.0, 0.9, 0.4, 0.95)
+        gfx.cone(0.12 * S, 0.7 * S * flick, 10)
+        glPopMatrix()
+    glPopMatrix()
+    gfx.lighting(True)
+
+
+# ---------------------------------------------------------------------------
 # Tree -- lit trunk + stacked cones
 # ---------------------------------------------------------------------------
 def draw_tree(x, y):

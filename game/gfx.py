@@ -180,6 +180,15 @@ def draw_sky(width, height, horizon_frac=0.55):
     glColor3f(*fog);  glVertex2f(width, 0);    glVertex2f(0, 0)
     glEnd()
 
+    # low sun glow near the horizon (left side, clear of the minimap)
+    sun_x, sun_y = width * 0.26, hy + height * 0.08
+    _radial(sun_x, sun_y, height * 0.17, (1.0, 0.82, 0.5, 0.5), (1.0, 0.82, 0.5, 0.0))
+    _radial(sun_x, sun_y, height * 0.05, (1.0, 0.97, 0.86, 0.95), (1.0, 0.95, 0.8, 0.0))
+
+    # a few soft, subtle clouds
+    for cxf, cyf, s in ((0.52, 0.9, 0.9), (0.78, 0.84, 0.7)):
+        _cloud(width * cxf, height * cyf, height * 0.045 * s)
+
     glPopMatrix()
     glMatrixMode(GL_PROJECTION)
     glPopMatrix()
@@ -187,6 +196,29 @@ def draw_sky(width, height, horizon_frac=0.55):
     glEnable(GL_LIGHTING)
     glEnable(GL_FOG)
     glEnable(GL_DEPTH_TEST)
+
+
+def _set_col(c):
+    (glColor4f if len(c) == 4 else glColor3f)(*c)
+
+
+def _radial(cx, cy, r, inner, outer):
+    """Filled radial gradient disc (sun glow / clouds); colors may be rgb or rgba."""
+    glBegin(GL_TRIANGLE_FAN)
+    _set_col(inner)
+    glVertex2f(cx, cy)
+    _set_col(outer)
+    seg = 24
+    for i in range(seg + 1):
+        a = i / seg * 2 * math.pi
+        glVertex2f(cx + r * math.cos(a), cy + r * math.sin(a))
+    glEnd()
+
+
+def _cloud(cx, cy, r):
+    for dx, dy, s in ((-1.4, 0, 0.8), (0, 0.2, 1.15), (1.3, 0, 0.85), (0.4, -0.15, 1.0)):
+        _radial(cx + dx * r, cy + dy * r, r * s * 1.6,
+                (1.0, 1.0, 1.0, 0.4), (1.0, 1.0, 1.0, 0.0))
 
 
 def draw_ground(size=8000, tiles=32):

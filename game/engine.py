@@ -18,11 +18,14 @@ from .entities import Player, Enemy, Bullet, draw_bullets
 
 # Game states
 MENU = "menu"
+COUNTDOWN = "countdown"
 PLAYING = "playing"
 PAUSED = "paused"
 WIN = "win"
 LOSE = "lose"
 ENEMY_WIN = "enemy_win"
+
+COUNTDOWN_TIME = 3.6           # seconds of "3 2 1 GO!" before the flag drops
 
 
 class Game:
@@ -44,7 +47,10 @@ class Game:
         self.message = ""
         self.message_until = 0.0
         self.spawn_protect_until = 0.0
-        self.max_dist_from_finish = 0.0
+        self.countdown_start = 0.0
+        self.checkpoint = None         # far-side gate that proves a real lap
+        self.checkpoint_reached = False
+        self.breaker_cd = 0.0
         # held-key movement state
         self.brake = False
         self.turn_left = False
@@ -63,15 +69,24 @@ class Game:
         self._spawn_props()
         self.bullets = []
         self.explosions = []
-        self.max_dist_from_finish = 0.0
-        self.spawn_protect_until = time.time() + 1.5
-        self.state = PLAYING
+        # lap checkpoint = the base waypoint farthest from the finish line
+        fx, fy = self.track.finish_line['pos']
+        base = track_mod.enemy_base_waypoints(layout_id, fy)
+        self.checkpoint = max(base, key=lambda w: (w[0] - fx) ** 2 + (w[1] - fy) ** 2)
+        self.checkpoint_reached = False
+        self.lap_waypoints = [(w[0], w[1]) for w in base]
+        self.spawn_protect_until = time.time() + COUNTDOWN_TIME + 1.0
+        self.countdown_start = time.time()
+        self.state = COUNTDOWN
 
     def _spawn_enemies(self, layout_id):
         fy = self.track.finish_line['pos'][1]
         base = track_mod.enemy_base_waypoints(layout_id, fy)
         self.enemies = []
+        # each rival races a laterally-offset copy of the base racing line...
         offsets = [-70, 0, 70]
+        # ...but starts in its own non-overlapping grid slot beside the player
+        grid = [(-140, -600), (150, -600), (-30, -520)]
         for i, off in enumerate(offsets):
             path = []
             bx0, by0 = base[0][0], base[0][1]
@@ -82,7 +97,12 @@ class Game:
                     path.append((x, y + off, z))
                 else:
                     path.append((x + off, y + off, z))
-            self.enemies.append(Enemy(path, random.uniform(4.0, 6.0)))
+            # a touch faster than the player's normal pace so they must be
+            # out-boosted, but still catchable (player boost = BOOST_SPEED)
+            e = Enemy(path, random.uniform(6.0, 7.6))
+            gx, gy = grid[i]
+            e.pos = [gx, gy, C.CAR_GROUND_Z]
+            self.enemies.append(e)
 
     def _spawn_props(self):
         road = list(self.track.road_points)
@@ -107,6 +127,30 @@ class Game:
         self.message = msg
         self.message_until = time.time() + seconds
 
+    def _lap_progress(self, x, y):
+        """Distance travelled along the racing line, for ranking cars."""
+        wps = self.lap_waypoints
+        best, best_d, cum = 0.0, 1e18, 0.0
+        for i in range(len(wps) - 1):
+            ax, ay = wps[i]
+            bx, by = wps[i + 1]
+            dx, dy = bx - ax, by - ay
+            seg2 = dx * dx + dy * dy or 1.0
+            t = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / seg2))
+            projx, projy = ax + dx * t, ay + dy * t
+            d = (x - projx) ** 2 + (y - projy) ** 2
+            if d < best_d:
+                best_d = d
+                best = cum + t * math.sqrt(seg2)
+            cum += math.sqrt(seg2)
+        return best
+
+    def player_place(self):
+        pp = self._lap_progress(self.player.pos[0], self.player.pos[1])
+        ahead = sum(1 for e in self.enemies
+                    if not e.finished and self._lap_progress(e.pos[0], e.pos[1]) > pp)
+        return ahead + 1, len(self.enemies) + 1
+
     # ------------------------------------------------------------------ camera
     def setup_camera(self, viewport_aspect):
         glMatrixMode(GL_PROJECTION)
@@ -127,9 +171,23 @@ class Game:
             look = (x + C.CAM_LOOK_AHEAD * fx, y + C.CAM_LOOK_AHEAD * fy, z + 14)
             gluLookAt(*eye, *look, 0, 0, 1)
 
+    def countdown_value(self):
+        """Return '3'/'2'/'1'/'GO!' or None once racing has begun."""
+        t = time.time() - self.countdown_start
+        if t >= COUNTDOWN_TIME:
+            return None
+        if t < COUNTDOWN_TIME - 0.6:
+            return str(int(COUNTDOWN_TIME - 0.6 - t) + 1)
+        return "GO!"
+
     # ------------------------------------------------------------------ update
     def update(self):
         now = time.time()
+        if self.state == COUNTDOWN:
+            # rivals idle on the grid until the flag drops
+            if self.countdown_value() is None:
+                self.state = PLAYING
+            return
         if self.state != PLAYING:
             return
 
@@ -279,17 +337,21 @@ class Game:
             else:
                 remaining.append((bx, by))
         self.bombs = remaining
-        # speed breakers
-        for (sx, sy, w, d) in self.track.speed_breakers:
-            if not p.jump_active and abs(px - sx) <= w / 2 and abs(py - sy) <= d:
-                p.jump_active = True
-                p.jump_start = now
-                if p.speed <= C.SLOW_SPEED + 0.1:
-                    p.jump_mode = "hit"
-                else:
-                    p.jump_mode = "jump"
-                    if not p.shield_active:
-                        p.lives = max(0, p.lives - 1)
+        # speed breakers: trigger zone matches the visible hump (depth d spans
+        # +/- d/2 across Y). One bump per pass (cooldown); no life loss -- just
+        # a jump and a brief loss of momentum if taken fast.
+        if not p.jump_active and now >= self.breaker_cd:
+            for (sx, sy, w, d) in self.track.speed_breakers:
+                if abs(px - sx) <= w / 2 and abs(py - sy) <= d / 2:
+                    p.jump_active = True
+                    p.jump_start = now
+                    self.breaker_cd = now + 1.2
+                    if p.speed <= C.SLOW_SPEED + 0.1:
+                        p.jump_mode = "hit"
+                    else:
+                        p.jump_mode = "jump"
+                        p.boost_active = False        # kills a boost; slows you
+                    break
 
     def _update_bullets(self):
         alive = []
@@ -312,17 +374,28 @@ class Game:
     def _check_finish(self, fx, fy):
         fl = self.track.finish_line
         p = self.player
-        dist = math.hypot(p.pos[0] - fl['pos'][0], p.pos[1] - fl['pos'][1])
-        self.max_dist_from_finish = max(self.max_dist_from_finish, dist)
-        if p.finished or self.max_dist_from_finish < 1500:
+        # A real lap must pass through the far-side checkpoint first. This stops
+        # the layout 2/3 exploit where the finish sits within reach of the start.
+        if self.checkpoint is not None and not self.checkpoint_reached:
+            if math.hypot(p.pos[0] - self.checkpoint[0],
+                          p.pos[1] - self.checkpoint[1]) < 320:
+                self.checkpoint_reached = True
+
+        if p.finished:
             return
         front_x = p.pos[0] + C.CAR_LENGTH / 2 * fx
         front_y = p.pos[1] + C.CAR_LENGTH / 2 * fy
         fxc, fyc = fl['pos']
-        if abs(front_x - fxc) < fl['width'] / 2 and abs(front_y - fyc) < 24:
-            if fy < -0.2:                     # crossing heading -Y (correct lap dir)
-                p.finished = True
-                self.state = WIN
+        over_line = abs(front_x - fxc) < fl['width'] / 2 and abs(front_y - fyc) < 24
+        if not over_line:
+            return
+        if not self.checkpoint_reached:
+            return                            # haven't run the lap yet
+        if fy < -0.2:                         # crossing heading -Y (correct dir)
+            p.finished = True
+            self.state = WIN
+        elif fy > 0.2 and time.time() >= self.breaker_cd:
+            self.flash("WRONG WAY - complete the lap!", 1.5)
 
     def fire(self):
         if self.state != PLAYING:
@@ -349,7 +422,13 @@ class Game:
         for (bx, by) in self.bombs:
             props.draw_bomb(bx, by)
         draw_bullets(self.bullets)
+        # ground shadows first so cars sit on top of them
+        props.draw_car_shadow(self.player.pos, self.player.angle)
+        for e in self.enemies:
+            props.draw_car_shadow(e.pos, e.angle)
         self.player.draw()
+        if self.player.boost_active:
+            props.draw_boost_flames(self.player.pos, self.player.angle)
         for e in self.enemies:
             e.draw()
         for ex in self.explosions:
@@ -369,6 +448,8 @@ class Game:
 
         hud.draw_minimap(self)
         hud.draw_dashboard(self)
+        if self.state == COUNTDOWN:
+            hud.draw_countdown(self, self.countdown_value())
         if self.state in (WIN, LOSE, ENEMY_WIN, PAUSED):
             hud.draw_overlay(self)
         glutSwapBuffers()

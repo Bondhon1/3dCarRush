@@ -38,6 +38,13 @@ def draw_dashboard(g):
     _chip(x0 + 18, y1 - 98, "BOOST", p.boost_active, C.COL_HUD_WARN)
     _chip(x0 + 150, y1 - 98, "SHIELD", p.shield_active, C.COL_SHIELD)
 
+    # Live race position
+    place, total = g.player_place()
+    pcol = C.COL_HUD_GOOD if place == 1 else (C.COL_HUD_WARN if place == 2 else C.COL_HUD_BAD)
+    suffix = {1: "st", 2: "nd", 3: "rd"}.get(place, "th")
+    gfx.text(x1 - 96, y1 - 66, f"{place}{suffix}", pcol)
+    gfx.text_small(x1 - 96, y1 - 84, f"of {total}", C.COL_HUD_DIM)
+
     # Rival standings (roomy vertical list)
     gfx.text_small(x0 + 18, y1 - 126, "RIVALS", C.COL_HUD_DIM)
     ry = y1 - 146
@@ -192,6 +199,22 @@ def draw_menu(g):
     gfx.text_centered(g.width / 2, 44,
                       "Drive WASD    Aim ARROWS    Fire SPACE    View V",
                       C.COL_HUD_DIM)
+    gfx.end_2d()
+
+
+# ---------------------------------------------------------------------------
+# Start countdown
+# ---------------------------------------------------------------------------
+def draw_countdown(g, value):
+    if value is None:
+        return
+    gfx.begin_2d(g.width, g.height)
+    go = (value == "GO!")
+    col = C.COL_HUD_GOOD if go else C.COL_HUD_WARN
+    scale = 1.0 if go else 0.9
+    gfx.big_text(g.width / 2, g.height / 2 - 10, value, scale, col, 4.0)
+    if not go:
+        gfx.text_centered(g.width / 2, g.height / 2 - 80, "GET READY", C.COL_HUD_TEXT)
     gfx.end_2d()
 
 
