@@ -1,10 +1,13 @@
-"""Compatibility launcher for the playable legacy game."""
+"""Launcher for the polished 3D Car Rush rebuild.
 
-from main import main as legacy_main
+Run with:  python main_new.py
+"""
+
+from game.engine import run
 
 
 def main():
-    legacy_main()
+    run()
 
 
 if __name__ == "__main__":

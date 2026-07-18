@@ -1,0 +1,226 @@
+"""2D overlays: dashboard, minimap, start menu and result screens."""
+
+import math
+import time
+from OpenGL.GL import *
+
+from . import config as C
+from . import gfx
+
+
+# ---------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------
+def draw_dashboard(g):
+    gfx.begin_2d(g.width, g.height)
+    p = g.player
+
+    x0, y0 = 18, 18
+    w, h = 360, 196
+    x1, y1 = x0 + w, y0 + h
+    gfx.rounded_rect(x0, y0, x1, y1, 14, C.COL_HUD_PANEL)
+    gfx.rect_outline(x0, y0, x1, y1, C.COL_HUD_EDGE, 1.6)
+
+    # Speed readout + bar
+    num = f"{int(p.speed * 6)}"
+    gfx.text(x0 + 18, y1 - 32, num, C.COL_HUD_TEXT)
+    gfx.text_small(x0 + 18 + gfx.text_width(num) + 6, y1 - 32, "km/h", C.COL_HUD_DIM)
+    view = "COCKPIT" if g.fpv else "CHASE"
+    gfx.hbar(x0 + 120, y1 - 36, 148, 12, p.speed / C.BOOST_SPEED, C.COL_HUD_EDGE)
+    gfx.text_small(x1 - 74, y1 - 30, view, C.COL_HUD_DIM)
+
+    # Armor pips
+    lives_col = C.COL_HUD_GOOD if p.lives >= 5 else C.COL_HUD_BAD
+    gfx.text_small(x0 + 18, y1 - 64, "ARMOR", C.COL_HUD_DIM)
+    _pips(x0 + 86, y1 - 70, C.PLAYER_MAX_LIVES, p.lives, lives_col, size=13, gap=4)
+
+    # Status chips
+    _chip(x0 + 18, y1 - 98, "BOOST", p.boost_active, C.COL_HUD_WARN)
+    _chip(x0 + 150, y1 - 98, "SHIELD", p.shield_active, C.COL_SHIELD)
+
+    # Rival standings (roomy vertical list)
+    gfx.text_small(x0 + 18, y1 - 126, "RIVALS", C.COL_HUD_DIM)
+    ry = y1 - 146
+    for i, e in enumerate(g.enemies):
+        gfx.text_small(x0 + 18, ry - i * 18, f"E{i+1}", (0.95, 0.55, 0.5))
+        _pips(x0 + 56, ry - 6 - i * 18, C.ENEMY_MAX_LIVES,
+              max(0, e.lives), C.COL_HUD_BAD, size=11, gap=4)
+
+    # transient flash message
+    if g.message and time.time() < g.message_until:
+        gfx.text_centered(g.width / 2, g.height - 60, g.message, C.COL_HUD_WARN)
+
+    gfx.end_2d()
+
+
+def _pips(x, y, total, filled, color, size=14, gap=5):
+    for i in range(total):
+        c = color if i < filled else (0.22, 0.24, 0.28)
+        glColor3f(*c)
+        px = x + i * (size + gap)
+        glBegin(GL_QUADS)
+        glVertex2f(px, y); glVertex2f(px + size, y)
+        glVertex2f(px + size, y + size * 0.55); glVertex2f(px, y + size * 0.55)
+        glEnd()
+
+
+def _chip(x, y, label, active, color):
+    on = color if active else C.COL_HUD_DIM
+    glColor3f(*on)
+    glBegin(GL_QUADS)
+    glVertex2f(x, y); glVertex2f(x + 12, y)
+    glVertex2f(x + 12, y + 12); glVertex2f(x, y + 12)
+    glEnd()
+    gfx.text_small(x + 18, y, label, on)
+
+
+# ---------------------------------------------------------------------------
+# Minimap (schematic top-down)
+# ---------------------------------------------------------------------------
+def draw_minimap(g):
+    gfx.begin_2d(g.width, g.height)
+    size = 220
+    pad = 18
+    x1 = g.width - pad
+    y1 = g.height - pad
+    x0 = x1 - size
+    y0 = y1 - size
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+
+    gfx.rounded_rect(x0, y0, x1, y1, 14, (0.05, 0.07, 0.10, 0.78))
+    gfx.rect_outline(x0, y0, x1, y1, C.COL_HUD_EDGE, 1.6)
+
+    span = 5200.0                       # world units shown across the map
+    scale = size / span
+    px, py = g.player.pos[0], g.player.pos[1]
+
+    def to_map(wx, wy):
+        return cx + (wx - px) * scale, cy + (wy - py) * scale
+
+    def inside(sx, sy):
+        return x0 + 4 < sx < x1 - 4 and y0 + 4 < sy < y1 - 4
+
+    # road
+    glColor3f(0.4, 0.42, 0.48)
+    glPointSize(2.0)
+    glBegin(GL_POINTS)
+    for (wx, wy) in g.track.mini_points:
+        sx, sy = to_map(wx, wy)
+        if inside(sx, sy):
+            glVertex2f(sx, sy)
+    glEnd()
+    glPointSize(1.0)
+
+    # finish line
+    fx, fy = g.track.finish_line['pos']
+    sfx, sfy = to_map(fx, fy)
+    if inside(sfx, sfy):
+        hw = g.track.finish_line['width'] / 2 * scale
+        glColor3f(0.95, 0.95, 0.95)
+        glLineWidth(2.0)
+        glBegin(GL_LINES)
+        glVertex2f(sfx - hw, sfy); glVertex2f(sfx + hw, sfy)
+        glEnd()
+        glLineWidth(1.0)
+
+    # enemies
+    glColor3f(*C.COL_ENEMY_BODY)
+    for e in g.enemies:
+        sx, sy = to_map(e.pos[0], e.pos[1])
+        if inside(sx, sy):
+            _dot(sx, sy, 4)
+
+    # player arrow
+    a = math.radians(g.player.angle)
+    glColor3f(*C.COL_PLAYER_ACCENT)
+    glBegin(GL_TRIANGLES)
+    for da, r in ((0, 8), (2.4, 5), (-2.4, 5)):
+        glVertex2f(cx + r * math.cos(a + da), cy + r * math.sin(a + da))
+    glEnd()
+
+    gfx.end_2d()
+
+
+def _dot(x, y, r):
+    glBegin(GL_QUADS)
+    glVertex2f(x - r, y - r); glVertex2f(x + r, y - r)
+    glVertex2f(x + r, y + r); glVertex2f(x - r, y + r)
+    glEnd()
+
+
+# ---------------------------------------------------------------------------
+# Start menu
+# ---------------------------------------------------------------------------
+def draw_menu(g):
+    gfx.begin_2d(g.width, g.height)
+    # dim veil over the sky
+    glColor4f(0.03, 0.05, 0.08, 0.55)
+    glBegin(GL_QUADS)
+    glVertex2f(0, 0); glVertex2f(g.width, 0)
+    glVertex2f(g.width, g.height); glVertex2f(0, g.height)
+    glEnd()
+
+    gfx.big_text(g.width / 2, g.height - 170, "3D CAR RUSH", 0.42,
+                 C.COL_HUD_EDGE, 3.0)
+    gfx.text_centered(g.width / 2, g.height - 210,
+                      "Outrun the rivals. Reach the finish first.",
+                      C.COL_HUD_TEXT)
+
+    # three track cards
+    names = ["CIRCUIT 1  ·  Figure Eight",
+             "CIRCUIT 2  ·  Long Loop",
+             "CIRCUIT 3  ·  Speedway"]
+    cw, ch = 460, 60
+    cx = g.width / 2
+    top = g.height - 280
+    for i, name in enumerate(names):
+        y = top - i * (ch + 18)
+        x0, x1 = cx - cw / 2, cx + cw / 2
+        sel = (i == g.menu_index)
+        bg = (0.10, 0.30, 0.36, 0.92) if sel else (0.08, 0.10, 0.14, 0.85)
+        gfx.rounded_rect(x0, y, x1, y + ch, 12, bg)
+        gfx.rect_outline(x0, y, x1, y + ch,
+                         C.COL_HUD_EDGE if sel else C.COL_HUD_DIM, 2.0 if sel else 1.2)
+        gfx.text(x0 + 26, y + ch / 2 - 6, name,
+                 C.COL_HUD_TEXT if sel else C.COL_HUD_DIM)
+        if sel:
+            gfx.text(x1 - 54, y + ch / 2 - 6, "RACE", C.COL_HUD_EDGE)
+
+    gfx.text_centered(g.width / 2, 70,
+                      "1 / 2 / 3 select      ENTER or CLICK to race",
+                      C.COL_HUD_WARN)
+    gfx.text_centered(g.width / 2, 44,
+                      "Drive WASD    Aim ARROWS    Fire SPACE    View V",
+                      C.COL_HUD_DIM)
+    gfx.end_2d()
+
+
+# ---------------------------------------------------------------------------
+# Result / pause overlay
+# ---------------------------------------------------------------------------
+def draw_overlay(g):
+    from .engine import WIN, LOSE, ENEMY_WIN, PAUSED
+    gfx.begin_2d(g.width, g.height)
+    glColor4f(0.02, 0.03, 0.05, 0.6)
+    glBegin(GL_QUADS)
+    glVertex2f(0, 0); glVertex2f(g.width, 0)
+    glVertex2f(g.width, g.height); glVertex2f(0, g.height)
+    glEnd()
+
+    if g.state == WIN:
+        title, col, sub = "VICTORY", C.COL_HUD_GOOD, "You crossed the line first!"
+    elif g.state == LOSE:
+        title, col, sub = "WRECKED", C.COL_HUD_BAD, "Out of armor."
+    elif g.state == ENEMY_WIN:
+        title, col, sub = "DEFEAT", C.COL_HUD_WARN, "A rival finished ahead of you."
+    else:
+        title, col, sub = "PAUSED", C.COL_HUD_EDGE, "Take a breath."
+
+    gfx.big_text(g.width / 2, g.height / 2 + 20, title, 0.5, col, 3.2)
+    gfx.text_centered(g.width / 2, g.height / 2 - 30, sub, C.COL_HUD_TEXT)
+    if g.state == PAUSED:
+        hint = "P resume   ·   R restart   ·   M menu"
+    else:
+        hint = "R race again   ·   M main menu"
+    gfx.text_centered(g.width / 2, g.height / 2 - 70, hint, C.COL_HUD_DIM)
+    gfx.end_2d()

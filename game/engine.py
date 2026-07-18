@@ -1,0 +1,497 @@
+"""Game engine: state, camera, input, update loop and the GLUT bootstrap."""
+
+import sys
+import math
+import time
+import random
+from OpenGL.GL import *
+from OpenGL.GLU import *
+from OpenGL.GLUT import *
+
+from . import config as C
+from . import gfx
+from . import track as track_mod
+from . import props
+from . import hud
+from .entities import Player, Enemy, Bullet, draw_bullets
+
+
+# Game states
+MENU = "menu"
+PLAYING = "playing"
+PAUSED = "paused"
+WIN = "win"
+LOSE = "lose"
+ENEMY_WIN = "enemy_win"
+
+
+class Game:
+    def __init__(self):
+        self.width = C.WINDOW_WIDTH
+        self.height = C.WINDOW_HEIGHT
+        self.state = MENU
+        self.menu_index = 0            # selected track on the start screen
+        self.fpv = False
+        self.track = track_mod.Track()
+        self.player = Player()
+        self.enemies = []
+        self.bullets = []
+        self.health_kits = []
+        self.shield_kits = []
+        self.bombs = []
+        self.trees = []
+        self.explosions = []
+        self.message = ""
+        self.message_until = 0.0
+        self.spawn_protect_until = 0.0
+        self.max_dist_from_finish = 0.0
+        # held-key movement state
+        self.brake = False
+        self.turn_left = False
+        self.turn_right = False
+        self.gun_left = False
+        self.gun_right = False
+        self.bump_cd = 0.0             # cooldown so one rival hit costs one life
+        self.wall_cd = 0.0             # cooldown so one wall crash costs one life
+
+    # ------------------------------------------------------------------ setup
+    def start_race(self, layout_id):
+        self.track.dispose()
+        self.track.build(layout_id)
+        self.player.reset()
+        self._spawn_enemies(layout_id)
+        self._spawn_props()
+        self.bullets = []
+        self.explosions = []
+        self.max_dist_from_finish = 0.0
+        self.spawn_protect_until = time.time() + 1.5
+        self.state = PLAYING
+
+    def _spawn_enemies(self, layout_id):
+        fy = self.track.finish_line['pos'][1]
+        base = track_mod.enemy_base_waypoints(layout_id, fy)
+        self.enemies = []
+        offsets = [-70, 0, 70]
+        for i, off in enumerate(offsets):
+            path = []
+            bx0, by0 = base[0][0], base[0][1]
+            for (x, y, z) in base:
+                if abs(x - bx0) < 1000:          # vertical run -> shift X
+                    path.append((x + off, y, z))
+                elif abs(y - by0) < 1000:        # horizontal run -> shift Y
+                    path.append((x, y + off, z))
+                else:
+                    path.append((x + off, y + off, z))
+            self.enemies.append(Enemy(path, random.uniform(4.0, 6.0)))
+
+    def _spawn_props(self):
+        road = list(self.track.road_points)
+        random.shuffle(road)
+        self.health_kits = road[:C.NUM_HEALTH_KITS]
+        self.shield_kits = road[C.NUM_HEALTH_KITS:C.NUM_HEALTH_KITS + C.NUM_SHIELD_KITS]
+        i = C.NUM_HEALTH_KITS + C.NUM_SHIELD_KITS
+        self.bombs = list(road[i:i + C.NUM_BOMBS])
+        self._spawn_trees()
+
+    def _spawn_trees(self):
+        self.trees = []
+        tries = 0
+        while len(self.trees) < C.NUM_TREES and tries < 1500:
+            tries += 1
+            x = random.uniform(-6500, 6500)
+            y = random.uniform(-6500, 5500)
+            if not self.track.is_on_road(x, y, radius2=90000):
+                self.trees.append((x, y))
+
+    def flash(self, msg, seconds=2.5):
+        self.message = msg
+        self.message_until = time.time() + seconds
+
+    # ------------------------------------------------------------------ camera
+    def setup_camera(self, viewport_aspect):
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        gluPerspective(C.FOV_Y, viewport_aspect, C.NEAR_PLANE, C.FAR_PLANE)
+        glMatrixMode(GL_MODELVIEW)
+        glLoadIdentity()
+
+        x, y, z = self.player.pos
+        a = math.radians(self.player.angle)
+        fx, fy = math.cos(a), math.sin(a)
+        if self.fpv:
+            eye = (x + 12 * fx, y + 12 * fy, z + 26)
+            look = (x + 200 * fx, y + 200 * fy, z + 20)
+            gluLookAt(*eye, *look, 0, 0, 1)
+        else:
+            eye = (x - C.CAM_BACK * fx, y - C.CAM_BACK * fy, z + C.CAM_HEIGHT)
+            look = (x + C.CAM_LOOK_AHEAD * fx, y + C.CAM_LOOK_AHEAD * fy, z + 14)
+            gluLookAt(*eye, *look, 0, 0, 1)
+
+    # ------------------------------------------------------------------ update
+    def update(self):
+        now = time.time()
+        if self.state != PLAYING:
+            return
+
+        p = self.player
+        # timed effects
+        if p.boost_active and now - p.boost_start > C.BOOST_DURATION:
+            p.boost_active = False
+        if p.shield_active and now - p.shield_start > C.SHIELD_DURATION:
+            p.shield_active = False
+
+        # steering (held keys)
+        if self.turn_left:
+            p.angle += C.TURN_SPEED
+        if self.turn_right:
+            p.angle -= C.TURN_SPEED
+        if self.gun_left:
+            p.gun_angle += C.GUN_TURN_SPEED
+        if self.gun_right:
+            p.gun_angle -= C.GUN_TURN_SPEED
+
+        self._update_jump(now)
+
+        # forward motion
+        if p.boost_active:
+            p.speed = C.BOOST_SPEED
+        elif self.brake:
+            p.speed = C.SLOW_SPEED
+        else:
+            p.speed = C.NORMAL_SPEED
+
+        protected = now < self.spawn_protect_until
+        a = math.radians(p.angle)
+        fx, fy = math.cos(a), math.sin(a)
+        old = list(p.pos)
+        p.pos[0] += p.speed * fx
+        p.pos[1] += p.speed * fy
+
+        if not protected and self._car_hits_wall(p.pos[0], p.pos[1], p.angle):
+            p.pos = old                       # blocked by the wall
+            if not p.shield_active and now >= self.wall_cd:
+                p.lives = max(0, p.lives - 1)
+                self.wall_cd = now + 1.0
+                self.explosions.append(props.Explosion(old[0], old[1], 0.6))
+                if p.lives <= 0:
+                    self.state = LOSE
+
+        # enemies
+        for e in self.enemies:
+            if e.lives <= 0:
+                e.respawn()
+            e.update()
+            if e.segment >= len(e.path) - 1 and not e.finished:
+                e.finished = True
+                if not p.finished:
+                    self.state = ENEMY_WIN
+        if not protected:
+            self._enemy_player_collisions()
+            self._pickup_and_hazards(now)
+
+        self._update_bullets()
+
+        # finish line
+        self._check_finish(fx, fy)
+
+        # cull dead explosions
+        self.explosions = [e for e in self.explosions if e.alive]
+
+    def _update_jump(self, now):
+        p = self.player
+        if not p.jump_active:
+            return
+        t = now - p.jump_start
+        if t >= C.JUMP_DURATION:
+            p.jump_active = False
+            p.jump_mode = None
+            p.pos[2] = C.CAR_GROUND_Z
+        else:
+            if p.jump_mode == "hit":
+                p.pos[2] = C.CAR_GROUND_Z + 8
+            else:
+                prog = t / C.JUMP_DURATION
+                p.pos[2] = C.CAR_GROUND_Z + 4 * C.JUMP_HEIGHT_MAX * prog * (1 - prog)
+
+    def _car_hits_wall(self, x, y, angle):
+        a = math.radians(angle)
+        ca, sa = math.cos(a), math.sin(a)
+        hl, hw = C.CAR_LENGTH / 2, C.CAR_WIDTH / 2
+        for lx in (-hl, 0, hl):
+            for ly in (-hw, hw):
+                wx = x + lx * ca - ly * sa
+                wy = y + lx * sa + ly * ca
+                if self.track.hits_border(wx, wy):
+                    return True
+        return False
+
+    def _enemy_player_collisions(self):
+        p = self.player
+        now = time.time()
+        px, py = p.pos[0], p.pos[1]
+        for e in self.enemies:
+            if math.hypot(px - e.pos[0], py - e.pos[1]) < C.CAR_LENGTH:
+                # push the two cars apart so they don't stick together
+                dx, dy = px - e.pos[0], py - e.pos[1]
+                d = math.hypot(dx, dy) or 1
+                nudge = (C.CAR_LENGTH + 6) * 0.5
+                p.pos[0] += dx / d * nudge
+                p.pos[1] += dy / d * nudge
+                e.pos[0] -= dx / d * nudge
+                e.pos[1] -= dy / d * nudge
+                if not p.shield_active and now >= self.bump_cd:
+                    p.lives = max(0, p.lives - 1)
+                    self.bump_cd = now + 1.0
+                    if p.lives <= 0:
+                        self.state = LOSE
+
+    def _pickup_and_hazards(self, now):
+        p = self.player
+        px, py = p.pos[0], p.pos[1]
+        # health
+        remaining = []
+        for (hx, hy) in self.health_kits:
+            if math.hypot(px - hx, py - hy) < 55 and p.lives < C.PLAYER_MAX_LIVES:
+                p.lives += 1
+                self.flash("+1 LIFE", 1.2)
+            else:
+                remaining.append((hx, hy))
+        self.health_kits = remaining
+        # shield
+        remaining = []
+        for (sx, sy) in self.shield_kits:
+            if math.hypot(px - sx, py - sy) < 55:
+                p.shield_active = True
+                p.shield_start = now
+                self.flash("SHIELD ON", 1.5)
+            else:
+                remaining.append((sx, sy))
+        self.shield_kits = remaining
+        # bombs
+        remaining = []
+        for (bx, by) in self.bombs:
+            if math.hypot(px - bx, py - by) < 30:
+                self.explosions.append(props.Explosion(bx, by))
+                if not p.shield_active:
+                    p.lives = max(0, p.lives - 1)
+                    if p.lives <= 0:
+                        self.state = LOSE
+            else:
+                remaining.append((bx, by))
+        self.bombs = remaining
+        # speed breakers
+        for (sx, sy, w, d) in self.track.speed_breakers:
+            if not p.jump_active and abs(px - sx) <= w / 2 and abs(py - sy) <= d:
+                p.jump_active = True
+                p.jump_start = now
+                if p.speed <= C.SLOW_SPEED + 0.1:
+                    p.jump_mode = "hit"
+                else:
+                    p.jump_mode = "jump"
+                    if not p.shield_active:
+                        p.lives = max(0, p.lives - 1)
+
+    def _update_bullets(self):
+        alive = []
+        for b in self.bullets:
+            b.advance()
+            hit = None
+            for e in self.enemies:
+                if math.hypot(b.x - e.pos[0], b.y - e.pos[1]) < C.BULLET_HIT_RADIUS:
+                    hit = e
+                    break
+            if hit:
+                hit.lives -= 1
+                hit.slow_until = time.time() + 2.0
+                self.explosions.append(props.Explosion(b.x, b.y, 0.5))
+                continue
+            if -70000 < b.x < 70000 and -70000 < b.y < 70000:
+                alive.append(b)
+        self.bullets = alive
+
+    def _check_finish(self, fx, fy):
+        fl = self.track.finish_line
+        p = self.player
+        dist = math.hypot(p.pos[0] - fl['pos'][0], p.pos[1] - fl['pos'][1])
+        self.max_dist_from_finish = max(self.max_dist_from_finish, dist)
+        if p.finished or self.max_dist_from_finish < 1500:
+            return
+        front_x = p.pos[0] + C.CAR_LENGTH / 2 * fx
+        front_y = p.pos[1] + C.CAR_LENGTH / 2 * fy
+        fxc, fyc = fl['pos']
+        if abs(front_x - fxc) < fl['width'] / 2 and abs(front_y - fyc) < 24:
+            if fy < -0.2:                     # crossing heading -Y (correct lap dir)
+                p.finished = True
+                self.state = WIN
+
+    def fire(self):
+        if self.state != PLAYING:
+            return
+        p = self.player
+        a = math.radians(p.angle)
+        self.bullets.append(Bullet(p.pos[0] + C.CAR_LENGTH / 2 * math.cos(a),
+                                   p.pos[1] + C.CAR_LENGTH / 2 * math.sin(a),
+                                   30, p.bullet_angle()))
+
+    # ------------------------------------------------------------------ render
+    def draw_world(self):
+        gfx.place_lights()
+        gfx.draw_ground()
+        self.track.draw()
+        for (tx, ty) in self.trees:
+            props.draw_tree(tx, ty)
+        for (sx, sy, w, d) in self.track.speed_breakers:
+            props.draw_speed_breaker(sx, sy, w, d)
+        for (hx, hy) in self.health_kits:
+            props.draw_health_kit(hx, hy)
+        for (sx, sy) in self.shield_kits:
+            props.draw_shield_kit(sx, sy)
+        for (bx, by) in self.bombs:
+            props.draw_bomb(bx, by)
+        draw_bullets(self.bullets)
+        self.player.draw()
+        for e in self.enemies:
+            e.draw()
+        for ex in self.explosions:
+            ex.draw()
+
+    def display(self):
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        gfx.draw_sky(self.width, self.height)
+        if self.state == MENU:
+            hud.draw_menu(self)
+            glutSwapBuffers()
+            return
+
+        glViewport(0, 0, self.width, self.height)
+        self.setup_camera(self.width / self.height)
+        self.draw_world()
+
+        hud.draw_minimap(self)
+        hud.draw_dashboard(self)
+        if self.state in (WIN, LOSE, ENEMY_WIN, PAUSED):
+            hud.draw_overlay(self)
+        glutSwapBuffers()
+
+
+APP = None
+
+
+# ---------------------------------------------------------------------------
+# GLUT callbacks
+# ---------------------------------------------------------------------------
+def _display():
+    APP.display()
+
+
+def _timer(_):
+    APP.update()
+    glutPostRedisplay()
+    glutTimerFunc(int(1000 / C.TARGET_FPS), _timer, 0)
+
+
+def _reshape(w, h):
+    APP.width = max(1, w)
+    APP.height = max(1, h)
+    glViewport(0, 0, w, h)
+
+
+def _key_down(key, x, y):
+    k = key.lower()
+    g = APP
+    if g.state == MENU:
+        if k in (b'\r', b'\n', b' '):
+            g.start_race(g.menu_index + 1)
+        elif k in (b'1', b'2', b'3'):
+            g.menu_index = int(k) - 1
+        elif k == b'\x1b':
+            sys.exit(0)
+        return
+    if k == b'p':
+        if g.state == PLAYING:
+            g.state = PAUSED
+        elif g.state == PAUSED:
+            g.state = PLAYING
+    elif k == b'r':
+        g.start_race(g.track.layout_id)
+    elif k == b'm':
+        g.state = MENU
+    elif k == b'v':
+        g.fpv = not g.fpv
+    elif k == b'\x1b':
+        g.state = MENU
+    elif k == b'w':
+        g.player.boost_active = True
+        g.player.boost_start = time.time()
+    elif k == b's':
+        g.brake = True
+    elif k == b'a':
+        g.turn_left = True
+    elif k == b'd':
+        g.turn_right = True
+    elif k == b' ':
+        g.fire()
+
+
+def _key_up(key, x, y):
+    k = key.lower()
+    g = APP
+    if k == b's':
+        g.brake = False
+    elif k == b'a':
+        g.turn_left = False
+    elif k == b'd':
+        g.turn_right = False
+
+
+def _special_down(key, x, y):
+    g = APP
+    if key == GLUT_KEY_LEFT:
+        g.gun_left = True
+    elif key == GLUT_KEY_RIGHT:
+        g.gun_right = True
+    elif key == GLUT_KEY_UP:
+        g.fire()
+
+
+def _special_up(key, x, y):
+    g = APP
+    if key == GLUT_KEY_LEFT:
+        g.gun_left = False
+    elif key == GLUT_KEY_RIGHT:
+        g.gun_right = False
+
+
+def _mouse(button, state, x, y):
+    g = APP
+    if button == GLUT_LEFT_BUTTON and state == GLUT_DOWN:
+        if g.state == MENU:
+            g.start_race(g.menu_index + 1)
+        else:
+            g.fire()
+    elif button == GLUT_RIGHT_BUTTON and state == GLUT_DOWN:
+        g.fpv = not g.fpv
+
+
+def run():
+    global APP
+    glutInit()
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH)
+    glutInitWindowSize(C.WINDOW_WIDTH, C.WINDOW_HEIGHT)
+    glutInitWindowPosition(60, 30)
+    glutCreateWindow(C.WINDOW_TITLE)
+
+    gfx.init_gl()
+    glutIgnoreKeyRepeat(1)
+
+    APP = Game()
+
+    glutDisplayFunc(_display)
+    glutReshapeFunc(_reshape)
+    glutKeyboardFunc(_key_down)
+    glutKeyboardUpFunc(_key_up)
+    glutSpecialFunc(_special_down)
+    glutSpecialUpFunc(_special_up)
+    glutMouseFunc(_mouse)
+    glutTimerFunc(int(1000 / C.TARGET_FPS), _timer, 0)
+    glutMainLoop()

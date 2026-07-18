@@ -58,6 +58,7 @@ finish_line_angle = 0
 finish_crossed = False
 prev_car_pos = car_pos[:]
 finish_line_width = 450  # or match the road width at the finish line
+spawn_protection_until = 0.0
 
 # Global constants for borders
 border_height = 30.0
@@ -1373,7 +1374,7 @@ def update_car():
     global boost_active, boost_start_time
     global cheat_message
     global paused , lives 
-    global shield_active, shield_start_time  # Add shield variables
+    global shield_active, shield_start_time, spawn_protection_until  # Add shield variables
     if lives <= 0:
         return
     if paused:
@@ -1384,6 +1385,8 @@ def update_car():
         current_speed = 0
         glutPostRedisplay()
         return
+
+    protected_from_collision = time.time() < spawn_protection_until
     update_enemy_cars()
     if enemy_win:
         current_speed = 0
@@ -1404,7 +1407,7 @@ def update_car():
         current_speed = normal_speed
 
 
-    if collision_flag:
+    if collision_flag and not protected_from_collision:
         if now - collision_start_time < 3:
             angle_rad = math.radians(car_angle - 90)
             old_pos = car_pos[:]
@@ -1424,15 +1427,16 @@ def update_car():
             current_speed = normal_speed
         glutPostRedisplay()
         return
-    check_enemy_player_collision()
-    apply_collision_response()
-    check_health_kit_collision()
-    check_bomb_collision()
-    check_shield_kit_collision()
-    check_speed_breaker_effect()
-    update_jump_physics()  # Add this line
-    check_enemy_speed_breaker_collision()  # Add this line
-    update_enemy_jump_physics()  # Add this line
+    if not protected_from_collision:
+        check_enemy_player_collision()
+        apply_collision_response()
+        check_health_kit_collision()
+        check_bomb_collision()
+        check_shield_kit_collision()
+        check_speed_breaker_effect()
+        update_jump_physics()  # Add this line
+        check_enemy_speed_breaker_collision()  # Add this line
+        update_enemy_jump_physics()  # Add this line
     update_bullets()
     
     multiplier = 1.0
@@ -1458,7 +1462,7 @@ def update_car():
 
 
     # Check collision going forward
-    if is_car_colliding():
+    if not protected_from_collision and is_car_colliding():
             collision_flag = True
             collision_start_time = now
             car_pos = old_pos[:]
@@ -1482,13 +1486,29 @@ def update_car():
 
 def reset_game():
     global car_pos, car_angle, finish_crossed, current_speed, collision_flag, lives, enemy_cars, enemy_win, cheat_message
+    global boost_active, boost_start_time, shield_active, shield_start_time, jump_active, jump_start_time
+    global breaker_hit_mode, speed_breaker_effect_active, speed_breaker_effect_timer, spawn_protection_until
+    global colliding_enemies, active_collision_effects, bullets
     
-    car_pos = [0, -600, 10]
+    car_pos = [50, -600, 10]
     car_angle = 0.0
     finish_crossed = False
     current_speed = normal_speed
     collision_flag = False
     lives = 10
+    boost_active = False
+    shield_active = False
+    jump_active = False
+    breaker_hit_mode = None
+    speed_breaker_effect_active = False
+    speed_breaker_effect_timer = 0
+    boost_start_time = 0
+    shield_start_time = 0
+    jump_start_time = 0
+    colliding_enemies.clear()
+    active_collision_effects.clear()
+    bullets = []
+    spawn_protection_until = time.time() + 1.5
     
     # Reset enemy cars to initial segment/position, and reset angles properly
     for ecar in enemy_cars:
@@ -1503,6 +1523,7 @@ def reset_game():
         ecar.finished = False
     
     enemy_win = False
+    cheat_message = ""
     spawn_shield_kits()
 
     # === Clear cheat_message after 5 seconds ===

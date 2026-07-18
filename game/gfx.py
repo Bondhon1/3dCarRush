@@ -1,0 +1,331 @@
+"""Low-level rendering: lighting, materials, atmosphere and lit primitives.
+
+This module is the heart of the visual overhaul. Every 3D primitive here emits
+proper surface normals so OpenGL's lighting model gives them real shading and
+highlights instead of the flat, unlit look of the legacy game.
+"""
+
+import math
+from OpenGL.GL import *
+from OpenGL.GLU import *
+from OpenGL.GLUT import (
+    glutBitmapCharacter, glutStrokeCharacter,
+    GLUT_BITMAP_HELVETICA_18, GLUT_BITMAP_HELVETICA_12,
+    GLUT_BITMAP_9_BY_15, GLUT_STROKE_ROMAN,
+)
+
+from . import config as C
+
+_quadric = None
+
+
+def _q():
+    """Lazily-created shared GLU quadric with smooth normals + fill."""
+    global _quadric
+    if _quadric is None:
+        _quadric = gluNewQuadric()
+        gluQuadricNormals(_quadric, GLU_SMOOTH)
+        gluQuadricDrawStyle(_quadric, GLU_FILL)
+    return _quadric
+
+
+# ---------------------------------------------------------------------------
+# One-time GL / lighting setup
+# ---------------------------------------------------------------------------
+def init_gl():
+    """Configure depth, shading, lighting and fog once at startup."""
+    glEnable(GL_DEPTH_TEST)
+    glShadeModel(GL_SMOOTH)
+    glEnable(GL_NORMALIZE)          # keep normals unit-length under glScalef
+    glEnable(GL_COLOR_MATERIAL)     # let glColor drive the diffuse material
+    glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
+
+    # A single warm "sun" plus soft sky fill light.
+    glEnable(GL_LIGHTING)
+    glEnable(GL_LIGHT0)
+    glLightfv(GL_LIGHT0, GL_AMBIENT, (0.35, 0.36, 0.40, 1.0))
+    glLightfv(GL_LIGHT0, GL_DIFFUSE, (1.0, 0.95, 0.85, 1.0))
+    glLightfv(GL_LIGHT0, GL_SPECULAR, (0.6, 0.6, 0.6, 1.0))
+
+    glEnable(GL_LIGHT1)             # cool fill from the opposite side
+    glLightfv(GL_LIGHT1, GL_AMBIENT, (0.0, 0.0, 0.0, 1.0))
+    glLightfv(GL_LIGHT1, GL_DIFFUSE, (0.18, 0.22, 0.34, 1.0))
+    glLightfv(GL_LIGHT1, GL_SPECULAR, (0.0, 0.0, 0.0, 1.0))
+
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, (0.25, 0.25, 0.25, 1.0))
+    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 24.0)
+
+    glLightModelfv(GL_LIGHT_MODEL_AMBIENT, (0.25, 0.25, 0.28, 1.0))
+    glEnable(GL_RESCALE_NORMAL)
+
+    # Distance fog blends the far world into the horizon haze.
+    glEnable(GL_FOG)
+    glFogi(GL_FOG_MODE, GL_LINEAR)
+    glFogfv(GL_FOG_COLOR, (*C.COL_FOG, 1.0))
+    glFogf(GL_FOG_START, 1400.0)
+    glFogf(GL_FOG_END, 5200.0)
+
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    glEnable(GL_LINE_SMOOTH)
+    glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)
+    glClearColor(*C.COL_SKY_HORIZON, 1.0)
+
+
+def place_lights():
+    """Position lights each frame (call after the camera is set)."""
+    glLightfv(GL_LIGHT0, GL_POSITION, (0.4, 0.5, 1.0, 0.0))   # directional sun
+    glLightfv(GL_LIGHT1, GL_POSITION, (-0.5, -0.4, 0.6, 0.0))
+
+
+def set_emissive(color):
+    """Make the next primitive glow (self-lit). Reset with clear_emissive()."""
+    glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, (*color, 1.0))
+
+
+def clear_emissive():
+    glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, (0.0, 0.0, 0.0, 1.0))
+
+
+def lighting(enabled):
+    (glEnable if enabled else glDisable)(GL_LIGHTING)
+
+
+# ---------------------------------------------------------------------------
+# Lit primitives (all with normals)
+# ---------------------------------------------------------------------------
+def box(sx, sy, sz):
+    """Axis-aligned box centred on the origin, spanning +/- s on each axis."""
+    x, y, z = sx, sy, sz
+    faces = (
+        # (normal), (four corners)
+        ((0, 0, 1), ((-x, -y, z), (x, -y, z), (x, y, z), (-x, y, z))),
+        ((0, 0, -1), ((-x, -y, -z), (-x, y, -z), (x, y, -z), (x, -y, -z))),
+        ((1, 0, 0), ((x, -y, -z), (x, y, -z), (x, y, z), (x, -y, z))),
+        ((-1, 0, 0), ((-x, -y, -z), (-x, -y, z), (-x, y, z), (-x, y, -z))),
+        ((0, 1, 0), ((-x, y, -z), (-x, y, z), (x, y, z), (x, y, -z))),
+        ((0, -1, 0), ((-x, -y, -z), (x, -y, -z), (x, -y, z), (-x, -y, z))),
+    )
+    glBegin(GL_QUADS)
+    for normal, verts in faces:
+        glNormal3f(*normal)
+        for v in verts:
+            glVertex3f(*v)
+    glEnd()
+
+
+def unit_cube(size=1.0):
+    box(size, size, size)
+
+
+def cylinder(radius, height, slices=20):
+    gluCylinder(_q(), radius, radius, height, slices, 1)
+
+
+def tapered_cylinder(r_bottom, r_top, height, slices=20):
+    gluCylinder(_q(), r_bottom, r_top, height, slices, 1)
+
+
+def cone(radius, height, slices=20):
+    gluCylinder(_q(), radius, 0.0, height, slices, 1)
+
+
+def disk(inner, outer, slices=24):
+    gluDisk(_q(), inner, outer, slices, 1)
+
+
+def sphere(radius, slices=18, stacks=14):
+    gluSphere(_q(), radius, slices, stacks)
+
+
+def capped_cylinder(radius, height, slices=20):
+    """A cylinder drawn along +Z with both ends closed off."""
+    q = _q()
+    gluCylinder(q, radius, radius, height, slices, 1)
+    gluDisk(q, 0, radius, slices, 1)          # bottom cap
+    glPushMatrix()
+    glTranslatef(0, 0, height)
+    gluDisk(q, 0, radius, slices, 1)          # top cap
+    glPopMatrix()
+
+
+# ---------------------------------------------------------------------------
+# Atmosphere: gradient sky + ground plane
+# ---------------------------------------------------------------------------
+def draw_sky(width, height, horizon_frac=0.55):
+    """Full-screen vertical gradient drawn behind everything else."""
+    glDisable(GL_DEPTH_TEST)
+    glDisable(GL_LIGHTING)
+    glDisable(GL_FOG)
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    glOrtho(0, width, 0, height, -1, 1)
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+
+    hy = height * horizon_frac
+    top = C.COL_SKY_TOP
+    hor = C.COL_SKY_HORIZON
+    glBegin(GL_QUADS)
+    # upper sky: top colour -> horizon colour
+    glColor3f(*top);  glVertex2f(0, height);   glVertex2f(width, height)
+    glColor3f(*hor);  glVertex2f(width, hy);   glVertex2f(0, hy)
+    glEnd()
+    # lower band: horizon haze -> a touch darker toward the bottom edge
+    fog = C.COL_FOG
+    glBegin(GL_QUADS)
+    glColor3f(*hor);  glVertex2f(0, hy);       glVertex2f(width, hy)
+    glColor3f(*fog);  glVertex2f(width, 0);    glVertex2f(0, 0)
+    glEnd()
+
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+    glEnable(GL_LIGHTING)
+    glEnable(GL_FOG)
+    glEnable(GL_DEPTH_TEST)
+
+
+def draw_ground(size=8000, tiles=32):
+    """A large lit grass plane with a subtle checker so motion reads clearly."""
+    glNormal3f(0, 0, 1)
+    step = (2 * size) / tiles
+    g1 = C.COL_GROUND
+    g2 = tuple(min(1.0, c + 0.05) for c in C.COL_GROUND)
+    y = -size
+    row = 0
+    glBegin(GL_QUADS)
+    while y < size:
+        x = -size
+        col = row
+        while x < size:
+            glColor3f(*(g1 if (col + row) % 2 == 0 else g2))
+            glVertex3f(x, y, -0.5)
+            glVertex3f(x + step, y, -0.5)
+            glVertex3f(x + step, y + step, -0.5)
+            glVertex3f(x, y + step, -0.5)
+            x += step
+            col += 1
+        y += step
+        row += 1
+    glEnd()
+
+
+# ---------------------------------------------------------------------------
+# 2D overlay helpers (HUD / menus)
+# ---------------------------------------------------------------------------
+def begin_2d(width, height):
+    """Enter a pixel-space orthographic overlay (lighting/fog/depth off)."""
+    glDisable(GL_DEPTH_TEST)
+    glDisable(GL_LIGHTING)
+    glDisable(GL_FOG)
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    gluOrtho2D(0, width, 0, height)
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+
+
+def end_2d():
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+    glEnable(GL_FOG)
+    glEnable(GL_LIGHTING)
+    glEnable(GL_DEPTH_TEST)
+
+
+def rounded_rect(x0, y0, x1, y1, r, color):
+    """Filled rectangle with softened corners (approximated by chamfers)."""
+    if len(color) == 4:
+        glColor4f(*color)
+    else:
+        glColor3f(*color)
+    r = min(r, (x1 - x0) / 2, (y1 - y0) / 2)
+    glBegin(GL_POLYGON)
+    steps = 5
+    corners = [
+        (x1 - r, y0 + r, -math.pi / 2, 0),
+        (x1 - r, y1 - r, 0, math.pi / 2),
+        (x0 + r, y1 - r, math.pi / 2, math.pi),
+        (x0 + r, y0 + r, math.pi, 3 * math.pi / 2),
+    ]
+    for cx, cy, a0, a1 in corners:
+        for i in range(steps + 1):
+            a = a0 + (a1 - a0) * i / steps
+            glVertex2f(cx + r * math.cos(a), cy + r * math.sin(a))
+    glEnd()
+
+
+def rect_outline(x0, y0, x1, y1, color, width=2.0):
+    glColor3f(*color[:3])
+    glLineWidth(width)
+    glBegin(GL_LINE_LOOP)
+    glVertex2f(x0, y0); glVertex2f(x1, y0)
+    glVertex2f(x1, y1); glVertex2f(x0, y1)
+    glEnd()
+    glLineWidth(1.0)
+
+
+def hbar(x, y, w, h, frac, color, bg=(0.16, 0.18, 0.22)):
+    """Horizontal progress bar (frac in 0..1)."""
+    frac = max(0.0, min(1.0, frac))
+    glColor3f(*bg)
+    glBegin(GL_QUADS)
+    glVertex2f(x, y); glVertex2f(x + w, y)
+    glVertex2f(x + w, y + h); glVertex2f(x, y + h)
+    glEnd()
+    glColor3f(*color[:3])
+    glBegin(GL_QUADS)
+    glVertex2f(x, y); glVertex2f(x + w * frac, y)
+    glVertex2f(x + w * frac, y + h); glVertex2f(x, y + h)
+    glEnd()
+
+
+def text(x, y, s, color=(1, 1, 1), font=GLUT_BITMAP_HELVETICA_18):
+    glColor3f(*color[:3])
+    glRasterPos2f(x, y)
+    for ch in s:
+        glutBitmapCharacter(font, ord(ch))
+
+
+def text_small(x, y, s, color=(1, 1, 1)):
+    text(x, y, s, color, GLUT_BITMAP_HELVETICA_12)
+
+
+def text_mono(x, y, s, color=(1, 1, 1)):
+    text(x, y, s, color, GLUT_BITMAP_9_BY_15)
+
+
+def text_width(s, font=GLUT_BITMAP_HELVETICA_18):
+    from OpenGL.GLUT import glutBitmapWidth
+    return sum(glutBitmapWidth(font, ord(ch)) for ch in s)
+
+
+def text_centered(cx, y, s, color=(1, 1, 1), font=GLUT_BITMAP_HELVETICA_18):
+    text(cx - text_width(s, font) / 2, y, s, color, font)
+
+
+def big_text(cx, y, s, scale, color=(1, 1, 1), width=2.4):
+    """Vector stroke text for headlines that need to scale up crisply."""
+    glColor3f(*color[:3])
+    total = sum(_stroke_width(ch) for ch in s) * scale
+    glPushMatrix()
+    glTranslatef(cx - total / 2, y, 0)
+    glScalef(scale, scale, scale)
+    glLineWidth(width)
+    for ch in s:
+        glutStrokeCharacter(GLUT_STROKE_ROMAN, ord(ch))
+    glLineWidth(1.0)
+    glPopMatrix()
+
+
+def _stroke_width(ch):
+    from OpenGL.GLUT import glutStrokeWidth
+    return glutStrokeWidth(GLUT_STROKE_ROMAN, ord(ch))
