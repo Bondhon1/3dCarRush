@@ -127,6 +127,7 @@ class Player:
         self.finished = False
         self.boost_active = False
         self.boost_start = 0.0
+        self.boost_cd_until = 0.0     # earliest time the next boost may fire
         self.shield_active = False
         self.shield_start = 0.0
         self.jump_active = False
@@ -159,6 +160,7 @@ class Enemy:
         self.jump_active = False
         self.jump_start = 0.0
         self.slow_until = 0.0
+        self.rage_until = 0.0        # temporary speed surge (player hit a rail)
         self.bank = 0.0              # current body roll (smoothed, degrees)
         self.gun_angle = 0.0         # turret heading relative to body forward
         self.fire_cd = 0.0           # next time this rival may shoot
@@ -214,8 +216,11 @@ class Enemy:
         # slow proportionally to the heading error -> a believable racing line
         err = min(1.0, abs(diff) / (math.pi / 2))
         spd = self.speed * (1.0 - (1.0 - C.ENEMY_CORNER_SLOWDOWN) * err)
-        if time.time() < self.slow_until:
+        now = time.time()
+        if now < self.slow_until:
             spd *= 0.45
+        if now < self.rage_until:                 # surge after a player rail bump
+            spd *= C.ENEMY_RAGE_FACTOR
         a = math.radians(self.angle)
         self.pos[0] += spd * fs * math.cos(a)
         self.pos[1] += spd * fs * math.sin(a)
@@ -260,6 +265,7 @@ class Enemy:
         self.finished = False
         self.bank = 0.0
         self.gun_angle = 0.0
+        self.rage_until = 0.0
         if len(self.path) > 1:
             dx = self.path[1][0] - self.path[0][0]
             dy = self.path[1][1] - self.path[0][1]

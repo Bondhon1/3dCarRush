@@ -21,6 +21,11 @@ BORDER_THICKNESS = 14.0
 G_LENGTH = 600                 # base unit the hand-built layouts are laid out in
 GRID = 8                       # collision grid resolution for road/border sets
 
+# Uniformly enlarges every circuit: all layout positions, lengths and corner
+# radii are multiplied by this (road *width* stays the same, so the road stays
+# comfortably wide while the laps get bigger and the corners more sweeping).
+TRACK_SCALE = 1.5
+
 # ---------------------------------------------------------------------------
 # Car dimensions (world units)
 # ---------------------------------------------------------------------------
@@ -41,6 +46,8 @@ BOOST_SPEED = 11.5             # top speed while boosting
 SLOW_SPEED = 3.0              # while braking
 TURN_SPEED = 1.9               # degrees per frame while turning
 BOOST_DURATION = 3.0
+BOOST_COOLDOWN = 2.5           # seconds you must wait after a boost before the
+                              # next one -- the speed-up can no longer be spammed
 # How quickly the car eases toward its target speed (per 60fps frame, 0..1).
 # Gives a smooth accelerate/decelerate ramp instead of an instant snap.
 SPEED_LERP = 0.10
@@ -51,6 +58,9 @@ ENEMY_SPEED_MIN = 7.0
 ENEMY_SPEED_MAX = 8.4
 ENEMY_MAX_TURN = 4.6           # deg/frame cap -> smooth but corners are makeable
 ENEMY_CORNER_SLOWDOWN = 0.5    # fraction of speed kept mid-corner
+# Rubber-band punishment: clip a side rail and the rivals surge ahead for a bit.
+ENEMY_RAGE_TIME = 3.0          # seconds the surge lasts after a wall bump
+ENEMY_RAGE_FACTOR = 1.5        # speed multiplier during the surge
 
 # ---------------------------------------------------------------------------
 # Camera
@@ -149,5 +159,5 @@ COL_HUD_GOOD = (0.30, 0.90, 0.45)
 COL_HUD_WARN = (1.0, 0.75, 0.15)
 COL_HUD_BAD = (1.0, 0.32, 0.32)
 
-# Player start (matches legacy)
-PLAYER_START = [50.0, -600.0, CAR_GROUND_Z]
+# Player start (matches legacy, scaled onto the enlarged track)
+PLAYER_START = [50.0 * TRACK_SCALE, -600.0 * TRACK_SCALE, CAR_GROUND_Z]

@@ -34,8 +34,8 @@ def draw_dashboard(g):
     gfx.text_small(x0 + 18, y1 - 64, "ARMOR", C.COL_HUD_DIM)
     _pips(x0 + 86, y1 - 70, C.PLAYER_MAX_LIVES, p.lives, lives_col, size=13, gap=4)
 
-    # Status chips
-    _chip(x0 + 18, y1 - 98, "BOOST", p.boost_active, C.COL_HUD_WARN)
+    # Status chips (boost shows a live recharge bar while on cooldown)
+    _boost_indicator(x0 + 18, y1 - 98, p)
     _chip(x0 + 150, y1 - 98, "SHIELD", p.shield_active, C.COL_SHIELD)
 
     # Live race position
@@ -71,6 +71,28 @@ def _pips(x, y, total, filled, color, size=14, gap=5):
         glEnd()
 
 
+def _boost_indicator(x, y, p):
+    """BOOST readiness: lit while active, a filling bar while recharging,
+    'READY' once available again."""
+    from . import config as C
+    now = time.time()
+    if p.boost_active:
+        col, label, frac = C.COL_HUD_WARN, "BOOST", 1.0
+    elif now < p.boost_cd_until:
+        col, label = C.COL_HUD_DIM, "CHARGING"
+        frac = 1.0 - (p.boost_cd_until - now) / C.BOOST_COOLDOWN
+    else:
+        col, label, frac = C.COL_HUD_GOOD, "BOOST", None
+    glColor3f(*col)
+    glBegin(GL_QUADS)
+    glVertex2f(x, y); glVertex2f(x + 12, y)
+    glVertex2f(x + 12, y + 12); glVertex2f(x, y + 12)
+    glEnd()
+    gfx.text_small(x + 18, y, label, col)
+    if frac is not None and label == "CHARGING":
+        gfx.hbar(x + 18, y - 8, 100, 5, frac, C.COL_HUD_WARN)
+
+
 def _chip(x, y, label, active, color):
     on = color if active else C.COL_HUD_DIM
     glColor3f(*on)
@@ -97,7 +119,7 @@ def draw_minimap(g):
     gfx.rounded_rect(x0, y0, x1, y1, 14, (0.05, 0.07, 0.10, 0.78))
     gfx.rect_outline(x0, y0, x1, y1, C.COL_HUD_EDGE, 1.6)
 
-    span = 5200.0                       # world units shown across the map
+    span = 5200.0 * C.TRACK_SCALE        # world units shown across the map
     scale = size / span
     px, py = g.player.pos[0], g.player.pos[1]
 

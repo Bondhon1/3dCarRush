@@ -267,10 +267,14 @@ def _cloud(cx, cy, r):
                 (1.0, 1.0, 1.0, 0.16), (1.0, 1.0, 1.0, 0.0))
 
 
-def draw_ground(size=8000, tiles=32):
-    """A large lit grass plane with a subtle checker so motion reads clearly."""
+def draw_ground(size=8000 * C.TRACK_SCALE, tile=500.0):
+    """A large lit grass plane with a subtle checker so motion reads clearly.
+
+    ``size`` follows TRACK_SCALE so the grass always extends past the enlarged
+    circuit (no void under distant road); the checker keeps a constant tile
+    size so its density looks the same at any scale."""
     glNormal3f(0, 0, 1)
-    step = (2 * size) / tiles
+    step = tile
     g1 = C.COL_GROUND
     g2 = tuple(min(1.0, c + 0.05) for c in C.COL_GROUND)
     y = -size

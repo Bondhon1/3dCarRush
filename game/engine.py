@@ -99,17 +99,21 @@ class Game:
         fy = self.track.finish_line['pos'][1]
         base = track_mod.enemy_base_waypoints(layout_id, fy)
         self.enemies = []
-        # each rival races a laterally-offset copy of the base racing line...
+        S = C.TRACK_SCALE
+        # each rival races a laterally-offset copy of the base racing line.
+        # The offset is a lateral position *within the road*, so it stays
+        # unscaled (road width is fixed); only the classification threshold and
+        # the longitudinal grid slots scale with the enlarged track.
         offsets = [-70, 0, 70]
         # ...but starts in its own non-overlapping grid slot beside the player
-        grid = [(-140, -600), (150, -600), (-30, -520)]
+        grid = [(-140, -600 * S), (150, -600 * S), (-30, -520 * S)]
         for i, off in enumerate(offsets):
             path = []
             bx0, by0 = base[0][0], base[0][1]
             for (x, y, z) in base:
-                if abs(x - bx0) < 1000:          # vertical run -> shift X
+                if abs(x - bx0) < 1000 * S:      # vertical run -> shift X
                     path.append((x + off, y, z))
-                elif abs(y - by0) < 1000:        # horizontal run -> shift Y
+                elif abs(y - by0) < 1000 * S:    # horizontal run -> shift Y
                     path.append((x, y + off, z))
                 else:
                     path.append((x + off, y + off, z))
@@ -130,15 +134,19 @@ class Game:
         self._spawn_scenery()
 
     def _spawn_scenery(self):
-        """Scatter trees, rocks, lakes and horizon hills clear of the track."""
+        """Scatter trees, rocks, lakes and horizon hills clear of the track.
+
+        Spawn extents scale with the enlarged track so scenery still fills the
+        whole world; object sizes and the road-clearance stay in absolute units."""
         self.trees, self.rocks, self.lakes, self.hills = [], [], [], []
+        S = C.TRACK_SCALE
 
         def _place(store, count, xr, yr, clear2, extra=None, tries_mul=25):
             tries = 0
             while len(store) < count and tries < count * tries_mul:
                 tries += 1
-                x = random.uniform(-xr, xr)
-                y = random.uniform(-yr, yr)
+                x = random.uniform(-xr * S, xr * S)
+                y = random.uniform(-yr * S, yr * S)
                 if self.track.is_on_road(x, y, radius2=clear2):
                     continue
                 store.append((x, y) if extra is None else extra(x, y))
@@ -153,7 +161,7 @@ class Game:
         # hills ring the far horizon for depth
         for _ in range(C.NUM_HILLS):
             ang = random.uniform(0, 2 * math.pi)
-            dist = random.uniform(6500, 9500)
+            dist = random.uniform(6500, 9500) * S
             x, y = math.cos(ang) * dist, math.sin(ang) * dist
             self.hills.append((x, y, random.uniform(700, 1500),
                                random.uniform(260, 520)))
@@ -248,6 +256,7 @@ class Game:
         # timed effects
         if p.boost_active and now - p.boost_start > C.BOOST_DURATION:
             p.boost_active = False
+            p.boost_cd_until = now + C.BOOST_COOLDOWN     # start the recharge
         if p.shield_active and now - p.shield_start > C.SHIELD_DURATION:
             p.shield_active = False
 
@@ -286,13 +295,18 @@ class Game:
 
         if not protected and self._car_hits_wall(p.pos[0], p.pos[1], p.angle):
             p.pos = old                       # blocked by the wall
-            if not p.shield_active and now >= self.wall_cd:
-                p.lives = max(0, p.lives - 1)
+            if now >= self.wall_cd:           # one event per bump (not per frame)
                 self.wall_cd = now + 1.0
-                self.explosions.append(props.Explosion(old[0], old[1], 0.6))
                 audio.play('crash', 0.7)
-                if p.lives <= 0:
-                    self._lose()
+                # clipping a rail lets every rival surge ahead for a few seconds
+                for e in self.enemies:
+                    e.rage_until = now + C.ENEMY_RAGE_TIME
+                self.flash("RIVALS SURGE!", 1.4)
+                if not p.shield_active:
+                    p.lives = max(0, p.lives - 1)
+                    self.explosions.append(props.Explosion(old[0], old[1], 0.6))
+                    if p.lives <= 0:
+                        self._lose()
 
         # enemies
         for e in self.enemies:
@@ -661,8 +675,15 @@ def _key_down(key, x, y):
         g.state = MENU
         audio.stop_engine()
     elif k == b'w':
-        g.player.boost_active = True
-        g.player.boost_start = time.time()
+        now = time.time()
+        p = g.player
+        if p.boost_active:
+            pass                                  # already boosting
+        elif now < p.boost_cd_until:
+            g.flash("BOOST RECHARGING", 0.8)      # still on cooldown
+        elif g.state == PLAYING:
+            p.boost_active = True
+            p.boost_start = now
     elif k == b's':
         g.brake = True
     elif k == b'a':

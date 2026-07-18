@@ -38,6 +38,13 @@ class Track:
         self.__init__()
         self.layout_id = layout_id
         {1: self._layout1, 2: self._layout2, 3: self._layout3}[layout_id]()
+        # Scale the non-geometry markers (finish + breakers) to match the
+        # enlarged pieces. Their WIDTH/DEPTH stay unscaled (road width is fixed).
+        S = C.TRACK_SCALE
+        fx, fy = self.finish_line['pos']
+        self.finish_line['pos'] = (fx * S, fy * S)
+        self.speed_breakers = [(x * S, y * S, w, d)
+                               for (x, y, w, d) in self.speed_breakers]
         self.mini_points = list(self.road_points)[::4]
 
     def draw(self):
@@ -91,7 +98,13 @@ class Track:
             r += dr
 
     # -- piece builders (collision now, geometry later) -------------------
+    # Every builder scales its POSITIONS, LENGTHS and RADII by TRACK_SCALE so
+    # the whole circuit enlarges uniformly.  Road *width* is deliberately left
+    # unscaled -- all pieces share it, so their joints still line up while the
+    # laps get bigger and the corners sweep wider.
     def _straight(self, cx, start_y, length, width=C.ROAD_WIDTH):
+        S = C.TRACK_SCALE
+        cx, start_y, length = cx * S, start_y * S, length * S
         hw = width / 2
         end_y = start_y + length
         self._fill_rect(cx - hw, cx + hw, start_y, end_y, self.road_points, 20)
@@ -101,6 +114,8 @@ class Track:
         self.pieces.append(('straight', cx, start_y, length, width))
 
     def _horizontal(self, cy, start_x, length, width=C.ROAD_WIDTH):
+        S = C.TRACK_SCALE
+        cy, start_x, length = cy * S, start_x * S, length * S
         hw = width / 2
         end_x = start_x + length
         self._fill_rect(start_x, end_x, cy - hw, cy + hw, self.road_points, 20)
@@ -110,6 +125,8 @@ class Track:
         self.pieces.append(('horizontal', cy, start_x, length, width))
 
     def _curve(self, cx, cy, radius, a0, a1, x_shift=0, width=C.ROAD_WIDTH):
+        S = C.TRACK_SCALE
+        cx, cy, radius, x_shift = cx * S, cy * S, radius * S, x_shift * S
         cx += x_shift
         hw = width / 2
         self._fill_arc(cx, cy, radius - hw, radius + hw, a0, a1,
@@ -367,16 +384,23 @@ class Track:
         self.speed_breakers = [(-5200, -2400, 400, 150)]
 
 
-# Enemy waypoint paths per layout (ported from legacy get_enemy_paths_for_layout)
+# Enemy waypoint paths per layout (ported from legacy get_enemy_paths_for_layout).
+# ``finish_y`` arrives ALREADY scaled (it comes from the scaled finish line), so
+# only the hand-authored coordinates need multiplying by TRACK_SCALE here.
 def enemy_base_waypoints(layout_id, finish_y):
-    L = C.G_LENGTH
+    S = C.TRACK_SCALE
+
+    def P(x, y):
+        return (x * S, y * S, 10)
+
+    last = (0.0, finish_y + 40 * S, 10)
     if layout_id == 1:
-        return [(0, -600, 10), (30, 800, 10), (-2300, 800, 10),
-                (-2300, -3600, 10), (2000, -3600, 10),
-                (2000, -800, 10), (0, -800, 10), (0, finish_y + 40, 10)]
+        return [P(0, -600), P(30, 800), P(-2300, 800),
+                P(-2300, -3600), P(2000, -3600),
+                P(2000, -800), P(0, -800), last]
     if layout_id == 2:
-        return [(0, -600, 10), (30, 800, 10), (-6200, 800, 10),
-                (-6200, -4800, 10), (-3600, -4800, 10),
-                (-3600, -3200, 10), (0, -3200, 10), (0, finish_y + 40, 10)]
-    return [(0, -600, 10), (0, 800, 10), (-5200, 800, 10),
-            (-5200, -3200, 10), (0, -3200, 10), (0, finish_y + 40, 10)]
+        return [P(0, -600), P(30, 800), P(-6200, 800),
+                P(-6200, -4800), P(-3600, -4800),
+                P(-3600, -3200), P(0, -3200), last]
+    return [P(0, -600), P(0, 800), P(-5200, 800),
+            P(-5200, -3200), P(0, -3200), last]
