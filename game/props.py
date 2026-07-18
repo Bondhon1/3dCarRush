@@ -221,34 +221,120 @@ def draw_rock(x, y, scale=1.0, rot=0.0):
 
 
 # ---------------------------------------------------------------------------
-# Hill -- a big soft green mound on the horizon (half-dome)
+# Hill -- an irregular, sun-shaded grassy mound with rocky faces.
+#
+# A single smooth dome reads as a green blob; real hills have an undulating
+# ridgeline, secondary humps and light/shadow across their slopes.  We build a
+# lumpy radial height-field once per random seed (with proper per-vertex
+# normals so GL_LIGHT0 shades it) and cache it in a display list, then scale an
+# instance for each placed hill.
 # ---------------------------------------------------------------------------
-def draw_hill(x, y, radius, height):
-    glPushMatrix()
-    glTranslatef(x, y, -12)
-    glScalef(radius, radius, height)
-    # far mounds tint cooler/hazier so they sit back in the atmosphere
-    glColor3f(*C.COL_HILL_FAR)
-    _dome(1.0, slices=18, stacks=8)
-    glPopMatrix()
+_HILL_LISTS = {}
+_HILL_SEEDS = 6
 
 
-def _dome(r, slices=16, stacks=8):
-    """Upper hemisphere of unit radius with outward normals (lit)."""
-    for i in range(stacks):
-        lat0 = (math.pi / 2) * (i / stacks)
-        lat1 = (math.pi / 2) * ((i + 1) / stacks)
-        z0, z1 = math.sin(lat0) * r, math.sin(lat1) * r
-        rc0, rc1 = math.cos(lat0) * r, math.cos(lat1) * r
+def _v_sub(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _v_cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0])
+
+
+def _v_norm(v):
+    m = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) or 1.0
+    return (v[0] / m, v[1] / m, v[2] / m)
+
+
+def _lerp3(a, b, t):
+    return (a[0] + (b[0] - a[0]) * t,
+            a[1] + (b[1] - a[1]) * t,
+            a[2] + (b[2] - a[2]) * t)
+
+
+def _build_hill_list(seed):
+    """Compile one lumpy unit hill (base radius ~1, peak height ~1) to a list."""
+    rng = random.Random(seed)
+    R, A = 24, 40                                   # radial rings, azimuth segs
+    # azimuthal ridge undulation (a few low harmonics)
+    ridge = [(rng.uniform(0.05, 0.16), rng.randint(2, 5), rng.uniform(0, 6.283))
+             for _ in range(3)]
+    # a couple of off-centre secondary humps break the dome symmetry
+    peaks = []
+    for _ in range(rng.randint(1, 3)):
+        pu = rng.uniform(0, 6.283)
+        pr = rng.uniform(0.22, 0.6)
+        peaks.append((pr * math.cos(pu), pr * math.sin(pu),
+                      rng.uniform(0.16, 0.38), rng.uniform(0.16, 0.30)))
+
+    def height(rr, u):
+        base = math.cos(min(1.0, rr) * math.pi / 2) ** 1.25   # 1 centre -> 0 rim
+        r = sum(a * math.sin(k * u + p) for a, k, p in ridge)
+        z = base * (1.0 + r * (1.0 - rr))                     # ridge grounded at rim
+        x, y = rr * math.cos(u), rr * math.sin(u)
+        for px, py, amp, w in peaks:
+            d2 = (x - px) ** 2 + (y - py) ** 2
+            z += amp * math.exp(-d2 / (2 * w * w)) * (1.0 - rr * rr)
+        return max(0.0, z)
+
+    # position grid
+    pos = [[(0.0, 0.0, 0.0)] * (A + 1) for _ in range(R + 1)]
+    zmax = 1e-6
+    for i in range(R + 1):
+        rr = i / R
+        for j in range(A + 1):
+            u = 2 * math.pi * j / A
+            z = height(rr, u)
+            pos[i][j] = (rr * math.cos(u), rr * math.sin(u), z)
+            zmax = max(zmax, z)
+
+    # smooth per-vertex normals from grid neighbours
+    nrm = [[(0.0, 0.0, 1.0)] * (A + 1) for _ in range(R + 1)]
+    for i in range(R + 1):
+        for j in range(A + 1):
+            du = _v_sub(pos[i][(j + 1) % A], pos[i][(j - 1) % A])
+            dv = _v_sub(pos[min(R, i + 1)][j], pos[max(0, i - 1)][j])
+            n = _v_cross(dv, du)
+            if n[2] < 0:
+                n = (-n[0], -n[1], -n[2])
+            nrm[i][j] = _v_norm(n)
+
+    def vcolor(i, j):
+        p, n = pos[i][j], nrm[i][j]
+        hn = min(1.0, p[2] / zmax)
+        col = _lerp3(C.COL_HILL_LOW, C.COL_HILL_HIGH, hn ** 0.8)
+        slope = 1.0 - max(0.0, min(1.0, n[2]))            # 0 flat .. 1 steep
+        col = _lerp3(col, C.COL_HILL_ROCK, min(0.65, slope * 1.1))
+        jit = (rng.random() - 0.5) * 0.05
+        return (max(0.0, col[0] + jit), max(0.0, col[1] + jit), max(0.0, col[2] + jit))
+
+    lid = glGenLists(1)
+    glNewList(lid, GL_COMPILE)
+    for i in range(R):
         glBegin(GL_QUAD_STRIP)
-        for j in range(slices + 1):
-            a = 2 * math.pi * j / slices
-            ca, sa = math.cos(a), math.sin(a)
-            glNormal3f(ca * math.cos(lat1), sa * math.cos(lat1), math.sin(lat1))
-            glVertex3f(rc1 * ca, rc1 * sa, z1)
-            glNormal3f(ca * math.cos(lat0), sa * math.cos(lat0), math.sin(lat0))
-            glVertex3f(rc0 * ca, rc0 * sa, z0)
+        for j in range(A + 1):
+            for ii in (i + 1, i):
+                c = vcolor(ii, j); n = nrm[ii][j]; p = pos[ii][j]
+                glColor3f(*c); glNormal3f(*n); glVertex3f(*p)
         glEnd()
+    glEndList()
+    return lid
+
+
+def draw_hill(x, y, radius, height):
+    seed = (int(x) * 73856093) ^ (int(y) * 19349663)
+    key = seed % _HILL_SEEDS
+    lid = _HILL_LISTS.get(key)
+    if lid is None:
+        lid = _build_hill_list(key + 1)
+        _HILL_LISTS[key] = lid
+    glPushMatrix()
+    glTranslatef(x, y, -8)                  # tuck the foot slightly into ground
+    glScalef(radius, radius, height)
+    glCallList(lid)
+    glPopMatrix()
 
 
 # ---------------------------------------------------------------------------
