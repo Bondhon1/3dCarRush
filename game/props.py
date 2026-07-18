@@ -191,9 +191,10 @@ def draw_boost_flames(pos, angle):
 # ---------------------------------------------------------------------------
 # Tree -- lit trunk + stacked cones
 # ---------------------------------------------------------------------------
-def draw_tree(x, y):
+def draw_tree(x, y, scale=1.0):
     glPushMatrix()
     glTranslatef(x, y, 0)
+    glScalef(scale, scale, scale)
     glColor3f(0.45, 0.28, 0.12)
     gfx.capped_cylinder(9, 58, 10)
     tiers = [(58, 42, 60, (0.10, 0.42, 0.14)),
@@ -204,3 +205,80 @@ def draw_tree(x, y):
         glPushMatrix(); glTranslatef(0, 0, z)
         gfx.cone(r, h, 12); glPopMatrix()
     glPopMatrix()
+
+
+# ---------------------------------------------------------------------------
+# Rock -- a low lit boulder (irregular squashed sphere)
+# ---------------------------------------------------------------------------
+def draw_rock(x, y, scale=1.0, rot=0.0):
+    glPushMatrix()
+    glTranslatef(x, y, 0)
+    glRotatef(rot, 0, 0, 1)
+    glScalef(30 * scale, 22 * scale, 16 * scale)
+    glColor3f(*C.COL_ROCK)
+    gfx.sphere(1.0, 9, 7)                       # low-poly -> faceted boulder look
+    glPopMatrix()
+
+
+# ---------------------------------------------------------------------------
+# Hill -- a big soft green mound on the horizon (half-dome)
+# ---------------------------------------------------------------------------
+def draw_hill(x, y, radius, height):
+    glPushMatrix()
+    glTranslatef(x, y, -12)
+    glScalef(radius, radius, height)
+    # far mounds tint cooler/hazier so they sit back in the atmosphere
+    glColor3f(*C.COL_HILL_FAR)
+    _dome(1.0, slices=18, stacks=8)
+    glPopMatrix()
+
+
+def _dome(r, slices=16, stacks=8):
+    """Upper hemisphere of unit radius with outward normals (lit)."""
+    for i in range(stacks):
+        lat0 = (math.pi / 2) * (i / stacks)
+        lat1 = (math.pi / 2) * ((i + 1) / stacks)
+        z0, z1 = math.sin(lat0) * r, math.sin(lat1) * r
+        rc0, rc1 = math.cos(lat0) * r, math.cos(lat1) * r
+        glBegin(GL_QUAD_STRIP)
+        for j in range(slices + 1):
+            a = 2 * math.pi * j / slices
+            ca, sa = math.cos(a), math.sin(a)
+            glNormal3f(ca * math.cos(lat1), sa * math.cos(lat1), math.sin(lat1))
+            glVertex3f(rc1 * ca, rc1 * sa, z1)
+            glNormal3f(ca * math.cos(lat0), sa * math.cos(lat0), math.sin(lat0))
+            glVertex3f(rc0 * ca, rc0 * sa, z0)
+        glEnd()
+
+
+# ---------------------------------------------------------------------------
+# Lake -- a flat translucent water disc with a rim, gently shimmering
+# ---------------------------------------------------------------------------
+def draw_lake(x, y, rx, ry):
+    glPushMatrix()
+    glTranslatef(x, y, 1.0)
+    glScalef(rx, ry, 1.0)
+    glNormal3f(0, 0, 1)
+    shimmer = 0.5 + 0.5 * math.sin(time.time() * 0.8)
+    # sandy/grassy rim
+    glColor3f(*C.COL_LAKE_EDGE)
+    _flat_disc(1.08, z=-0.6)
+    # water surface (slightly translucent so ground tints through)
+    glDepthMask(GL_FALSE)
+    glColor4f(C.COL_LAKE[0], C.COL_LAKE[1],
+              C.COL_LAKE[2] + 0.06 * shimmer, 0.82)
+    _flat_disc(1.0, z=0.0)
+    # a brighter sky-glint band across the middle
+    glColor4f(0.7, 0.85, 0.95, 0.18 + 0.12 * shimmer)
+    _flat_disc(0.55, z=0.05)
+    glDepthMask(GL_TRUE)
+    glPopMatrix()
+
+
+def _flat_disc(r, z=0.0, seg=40):
+    glBegin(GL_TRIANGLE_FAN)
+    glVertex3f(0, 0, z)
+    for i in range(seg + 1):
+        a = 2 * math.pi * i / seg
+        glVertex3f(r * math.cos(a), r * math.sin(a), z)
+    glEnd()

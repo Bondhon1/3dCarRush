@@ -6,6 +6,7 @@ highlights instead of the flat, unlit look of the legacy game.
 """
 
 import math
+import time as _time
 from OpenGL.GL import *
 from OpenGL.GLU import *
 from OpenGL.GLUT import (
@@ -184,26 +185,24 @@ def draw_sky(width, height, horizon_frac=0.55, yaw=0.0):
     glColor3f(*fog);  glVertex2f(width, 0);    glVertex2f(0, 0)
     glEnd()
 
-    # panorama scroll: one full car rotation scrolls the sky twice across
-    period = width * 2.0
-    shift = ((yaw % 360.0) / 360.0) * period
+    # Panorama scroll. One full car rotation scrolls the sky exactly once
+    # (natural parallax), and a slow, continuous wind term drifts the clouds
+    # even when the view is still -- this is what fixes the "clouds look weird
+    # in movement" jitter: motion is now smooth and wrapping is seamless.
+    period = width * 3.0
+    yaw_shift = ((yaw % 360.0) / 360.0) * period
+    wind = (_time.time() * 12.0) % period
 
-    # low sun glow near the horizon, scrolling with the view
-    sun_y = hy + height * 0.08
-    sun_x = (width * 0.55 - shift) % period
-    for sxp in (sun_x, sun_x - period, sun_x + period):
-        if -height < sxp < width + height:
-            _radial(sxp, sun_y, height * 0.17, (1.0, 0.82, 0.5, 0.5), (1.0, 0.82, 0.5, 0.0))
-            _radial(sxp, sun_y, height * 0.05, (1.0, 0.97, 0.86, 0.95), (1.0, 0.95, 0.8, 0.0))
+    # low sun glow near the horizon (parallaxes with the view, no wind)
+    sun_y = hy + height * 0.09
+    _draw_wrapped(width * 0.62, yaw_shift, period, width, sun_y, _draw_sun, height)
 
-    # soft clouds spread around the whole panorama so turning reveals new ones
-    for cxf, cyf, s in ((0.10, 0.86, 0.9), (0.42, 0.9, 0.7), (0.78, 0.84, 0.85),
-                        (1.15, 0.88, 0.8), (1.6, 0.82, 0.7)):
-        base = width * cxf
-        cx = (base - shift) % period
-        for cxp in (cx, cx - period, cx + period):
-            if -220 < cxp < width + 220:
-                _cloud(cxp, height * cyf, height * 0.045 * s)
+    # Soft layered clouds. Each has a stable azimuth + height + size; near
+    # clouds (bigger) drift a touch faster than far ones for gentle depth.
+    for az, cyf, s, par in _CLOUDS:
+        shift = yaw_shift * par + wind * (0.6 + 0.4 * par)
+        _draw_wrapped(width * az, shift, period, width,
+                      height * cyf, _cloud, height * 0.05 * s)
 
     glPopMatrix()
     glMatrixMode(GL_PROJECTION)
@@ -231,10 +230,41 @@ def _radial(cx, cy, r, inner, outer):
     glEnd()
 
 
+# Persistent cloud field: (azimuth fraction, height fraction, size, parallax).
+# Spread around a 3x-width panorama so turning keeps revealing fresh sky.
+_CLOUDS = (
+    (0.05, 0.87, 1.10, 1.00), (0.28, 0.92, 0.75, 0.85), (0.52, 0.84, 1.00, 1.00),
+    (0.74, 0.90, 0.65, 0.80), (0.95, 0.86, 0.95, 0.95), (1.20, 0.91, 0.80, 0.85),
+    (1.45, 0.83, 1.15, 1.00), (1.70, 0.89, 0.70, 0.82), (1.95, 0.87, 0.90, 0.92),
+    (2.20, 0.93, 0.72, 0.80), (2.48, 0.85, 1.05, 1.00), (2.75, 0.90, 0.68, 0.83),
+)
+
+
+def _draw_wrapped(base, shift, period, width, y, fn, arg, margin=260):
+    """Draw ``fn(x, y, arg)`` at a scrolled x, tiling across the seam so a
+    cloud/sun leaving one edge reappears at the other with no pop."""
+    cx = (base - shift) % period
+    for xp in (cx - period, cx, cx + period):
+        if -margin < xp < width + margin:
+            fn(xp, y, arg)
+
+
+def _draw_sun(cx, cy, height):
+    _radial(cx, cy, height * 0.18, (1.0, 0.80, 0.48, 0.5), (1.0, 0.80, 0.48, 0.0))
+    _radial(cx, cy, height * 0.055, (1.0, 0.97, 0.86, 0.95), (1.0, 0.95, 0.8, 0.0))
+
+
 def _cloud(cx, cy, r):
-    for dx, dy, s in ((-1.4, 0, 0.8), (0, 0.2, 1.15), (1.3, 0, 0.85), (0.4, -0.15, 1.0)):
-        _radial(cx + dx * r, cy + dy * r, r * s * 1.6,
-                (1.0, 1.0, 1.0, 0.4), (1.0, 1.0, 1.0, 0.0))
+    """A soft puffy cloud built from overlapping feathered blobs.
+
+    Low peak alpha + many wide lobes keeps edges gentle so the cloud reads as
+    a smooth mass rather than a cluster of hard discs while it drifts."""
+    lobes = ((-1.7, -0.05, 0.85), (-0.9, 0.18, 1.05), (0.0, 0.28, 1.25),
+             (0.9, 0.15, 1.05), (1.7, -0.05, 0.9), (-0.3, -0.2, 0.95),
+             (0.5, -0.22, 0.9))
+    for dx, dy, s in lobes:
+        _radial(cx + dx * r, cy + dy * r, r * s * 1.9,
+                (1.0, 1.0, 1.0, 0.16), (1.0, 1.0, 1.0, 0.0))
 
 
 def draw_ground(size=8000, tiles=32):

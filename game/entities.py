@@ -31,12 +31,18 @@ def _wheel(wx, wy, wz, radius, width):
     glPopMatrix()
 
 
-def draw_car(x, y, z, angle, body, accent, gun_angle=None):
-    """Draw a lit, detailed car. If ``gun_angle`` is given, mount a turret."""
+def draw_car(x, y, z, angle, body, accent, gun_angle=None, bank=0.0):
+    """Draw a lit, detailed car.
+
+    ``gun_angle`` (if given) mounts a tracking turret; ``bank`` rolls the body
+    into corners so a turning car leans instead of pivoting flat like a robot.
+    """
     S = C.CAR_SCALE
     glPushMatrix()
     glTranslatef(x, y, z)
     glRotatef(angle, 0, 0, 1)
+    if bank:
+        glRotatef(bank, 1, 0, 0)          # lean into the turn (roll about forward)
 
     # lower skirt (darker, slightly wider) grounds the car visually
     glColor3f(*(c * 0.6 for c in body))
@@ -153,6 +159,10 @@ class Enemy:
         self.jump_active = False
         self.jump_start = 0.0
         self.slow_until = 0.0
+        self.bank = 0.0              # current body roll (smoothed, degrees)
+        self.gun_angle = 0.0         # turret heading relative to body forward
+        self.fire_cd = 0.0           # next time this rival may shoot
+        self.aiming = False          # turret currently tracking the player
         if len(path) > 1:
             dx = path[1][0] - path[0][0]
             dy = path[1][1] - path[0][1]
@@ -160,72 +170,176 @@ class Enemy:
         else:
             self.angle = 90.0
 
-    def update(self):
-        if self.finished or self.segment >= len(self.path) - 1:
-            return
-        goal = self.path[self.segment + 1]
+    def _steer_target(self):
+        """Aim a little past the next waypoint so corners are rounded, not
+        clipped 90-degree pivots.  Blends the current leg with the next one as
+        the car nears the corner, which is what removes the 'robotic' feel."""
+        i = self.segment
+        goal = self.path[i + 1]
         dx, dy = goal[0] - self.pos[0], goal[1] - self.pos[1]
         dist = math.hypot(dx, dy)
+        # within a corner-radius of the waypoint, start blending toward the
+        # following leg's direction so the heading eases through the turn
+        if i + 2 < len(self.path) and dist < 260:
+            nxt = self.path[i + 2]
+            blend = 1.0 - (dist / 260.0)          # 0 far -> 1 at the corner
+            ndx, ndy = nxt[0] - goal[0], nxt[1] - goal[1]
+            nd = math.hypot(ndx, ndy) or 1.0
+            gx = dx / (dist or 1.0) * (1 - blend) + ndx / nd * blend
+            gy = dy / (dist or 1.0) * (1 - blend) + ndy / nd * blend
+            return math.atan2(gy, gx), dist
+        return math.atan2(dy, dx), dist
+
+    def update(self):
+        if self.finished or self.segment >= len(self.path) - 1:
+            self.bank *= 0.85
+            return
+        goal = self.path[self.segment + 1]
+        target, dist = self._steer_target()
         if dist == 0:
             self.segment += 1
             return
 
-        target = math.atan2(dy, dx)
         cur = math.radians(self.angle)
         diff = ((target - cur + math.pi) % (2 * math.pi)) - math.pi
-        turn = math.radians(4.5)
-        cur = target if abs(diff) < turn else cur + (turn if diff > 0 else -turn)
+        # capped, proportional steering: big errors turn near the cap, small
+        # ones ease in -- smooth arcs instead of instant snaps
+        max_turn = math.radians(C.ENEMY_MAX_TURN)
+        step = max(-max_turn, min(max_turn, diff * 0.35))
+        cur += step
         self.angle = math.degrees(cur)
 
+        # bank into the corner proportional to how hard we're steering
+        target_bank = max(-16.0, min(16.0, -math.degrees(step) * 4.5))
+        self.bank += (target_bank - self.bank) * 0.18
+
+        # slow for sharp corners so the racing line reads as deliberate driving
         spd = self.speed
+        corner = min(1.0, abs(diff) / (math.pi / 2))
+        spd *= 1.0 - (1.0 - C.ENEMY_CORNER_SLOWDOWN) * corner
         if time.time() < self.slow_until:
             spd *= 0.45
-        heading = (math.cos(cur), math.sin(cur))
-        proj = (dx / dist) * heading[0] + (dy / dist) * heading[1]
-        if proj > 0:
-            self.pos[0] += spd * proj * heading[0]
-            self.pos[1] += spd * proj * heading[1]
 
-        if math.hypot(goal[0] - self.pos[0], goal[1] - self.pos[1]) < spd + 1:
-            self.pos = list(goal)
+        heading = (math.cos(cur), math.sin(cur))
+        self.pos[0] += spd * heading[0]
+        self.pos[1] += spd * heading[1]
+
+        if math.hypot(goal[0] - self.pos[0], goal[1] - self.pos[1]) < spd + 2:
             self.segment += 1
+
+    def aim_and_maybe_fire(self, player, now):
+        """Track the player with the turret; return a Bullet if it fires.
+
+        Only rivals whose turret can see a nearby player pull the trigger, so
+        the guns feel like a threat you provoke by tailgating rather than a
+        constant hail of fire."""
+        self.aiming = False
+        if self.finished or self.lives <= 0:
+            self.gun_angle *= 0.9
+            return None
+        dx = player.pos[0] - self.pos[0]
+        dy = player.pos[1] - self.pos[1]
+        dist = math.hypot(dx, dy)
+        if dist > C.ENEMY_GUN_RANGE:
+            self.gun_angle *= 0.9                 # relax turret back to centre
+            return None
+        self.aiming = True
+        # desired turret heading relative to the body
+        want = math.degrees(math.atan2(dy, dx)) - self.angle
+        want = ((want + 180) % 360) - 180
+        d = ((want - self.gun_angle + 180) % 360) - 180
+        self.gun_angle += max(-C.ENEMY_GUN_TURN, min(C.ENEMY_GUN_TURN, d))
+        self.gun_angle = ((self.gun_angle + 180) % 360) - 180   # keep it bounded
+        # fire only when the barrel is actually lined up and cooled down
+        aligned = abs(((want - self.gun_angle + 180) % 360) - 180) < 12
+        if aligned and now >= self.fire_cd:
+            self.fire_cd = now + C.ENEMY_FIRE_COOLDOWN
+            a = math.radians(self.angle + self.gun_angle)
+            return Bullet(self.pos[0] + C.CAR_LENGTH / 2 * math.cos(a),
+                          self.pos[1] + C.CAR_LENGTH / 2 * math.sin(a),
+                          28, self.angle + self.gun_angle, team="enemy")
+        return None
 
     def respawn(self):
         self.pos = list(self.path[0])
         self.segment = 0
         self.lives = C.ENEMY_MAX_LIVES
         self.finished = False
+        self.bank = 0.0
+        self.gun_angle = 0.0
         if len(self.path) > 1:
             dx = self.path[1][0] - self.path[0][0]
             dy = self.path[1][1] - self.path[0][1]
             self.angle = math.degrees(math.atan2(dy, dx))
 
     def draw(self):
+        # rivals are armed: the turret is always mounted and swings toward the
+        # player when in range (it relaxes back to forward otherwise)
         draw_car(self.pos[0], self.pos[1], self.pos[2], self.angle,
-                 C.COL_ENEMY_BODY, (1.0, 0.6, 0.3))
+                 C.COL_ENEMY_BODY, (1.0, 0.6, 0.3),
+                 gun_angle=self.gun_angle, bank=self.bank)
 
 
 # ---------------------------------------------------------------------------
 # Bullets
 # ---------------------------------------------------------------------------
 class Bullet:
-    __slots__ = ("x", "y", "z", "angle")
+    __slots__ = ("x", "y", "z", "angle", "team", "born")
 
-    def __init__(self, x, y, z, angle):
+    def __init__(self, x, y, z, angle, team="player"):
         self.x, self.y, self.z, self.angle = x, y, z, angle
+        self.team = team
+        self.born = time.time()
+
+    def speed(self):
+        return C.BULLET_SPEED if self.team == "player" else C.ENEMY_BULLET_SPEED
 
     def advance(self):
         a = math.radians(self.angle)
-        self.x += C.BULLET_SPEED * math.cos(a)
-        self.y += C.BULLET_SPEED * math.sin(a)
+        self.x += self.speed() * math.cos(a)
+        self.y += self.speed() * math.sin(a)
 
 
 def draw_bullets(bullets):
-    gfx.set_emissive((0.9, 0.5, 0.1))
-    glColor3f(1.0, 0.75, 0.2)
+    """Draw bullets as glowing energy bolts -- a bright core, a tapered nose
+    and a fading tracer tail -- so they read as fast rounds, not floating balls."""
     for b in bullets:
+        core, tail = (C.COL_PLAYER_TRACER, (1.0, 0.55, 0.1)) \
+            if b.team == "player" else (C.COL_ENEMY_TRACER, (1.0, 0.2, 0.08))
         glPushMatrix()
         glTranslatef(b.x, b.y, b.z)
-        gfx.sphere(4.0, 10, 8)
+        glRotatef(b.angle, 0, 0, 1)          # orient the bolt along its travel
+        glRotatef(90, 0, 1, 0)               # bolt long axis -> local +X
+
+        # fading tracer streak behind the round (additive glow, no depth write)
+        gfx.lighting(False)
+        glDepthMask(GL_FALSE)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+        glBegin(GL_TRIANGLES)
+        length = 42.0
+        for hw, aa in ((3.2, 0.5), (1.4, 0.9)):
+            glColor4f(*tail, 0.0)
+            glVertex3f(0, 0, length)
+            glColor4f(*core, aa)
+            glVertex3f(-hw, 0, 0)
+            glColor4f(*core, aa)
+            glVertex3f(hw, 0, 0)
+            glColor4f(*tail, 0.0)
+            glVertex3f(0, 0, length)
+            glColor4f(*core, aa)
+            glVertex3f(0, -hw, 0)
+            glColor4f(*core, aa)
+            glVertex3f(0, hw, 0)
+        glEnd()
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+        # solid glowing slug at the head
+        gfx.lighting(True)
+        gfx.set_emissive(core)
+        glColor3f(*core)
+        gfx.tapered_cylinder(3.0, 0.4, 11.0, 10)     # tapered nose along +Z
+        glPushMatrix(); glTranslatef(0, 0, -3.0)
+        gfx.sphere(3.0, 8, 6); glPopMatrix()          # rounded tail cap
+        gfx.clear_emissive()
+        glDepthMask(GL_TRUE)
         glPopMatrix()
-    gfx.clear_emissive()

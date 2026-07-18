@@ -13,6 +13,7 @@ from . import gfx
 from . import track as track_mod
 from . import props
 from . import hud
+from . import audio
 from .entities import Player, Enemy, Bullet, draw_bullets
 
 
@@ -43,6 +44,9 @@ class Game:
         self.shield_kits = []
         self.bombs = []
         self.trees = []
+        self.hills = []
+        self.lakes = []
+        self.rocks = []
         self.explosions = []
         self.message = ""
         self.message_until = 0.0
@@ -59,6 +63,7 @@ class Game:
         self.gun_right = False
         self.bump_cd = 0.0             # cooldown so one rival hit costs one life
         self.wall_cd = 0.0             # cooldown so one wall crash costs one life
+        self._last_count = None        # last countdown value we beeped for
 
     # ------------------------------------------------------------------ setup
     def start_race(self, layout_id):
@@ -83,6 +88,10 @@ class Game:
         self.spawn_protect_until = time.time() + COUNTDOWN_TIME + 1.0
         self.countdown_start = time.time()
         self.state = COUNTDOWN
+        self._last_count = None
+        audio.start_music()
+        audio.start_engine()
+        audio.set_engine(0.2)
 
     def _spawn_enemies(self, layout_id):
         fy = self.track.finish_line['pos'][1]
@@ -102,9 +111,9 @@ class Game:
                     path.append((x, y + off, z))
                 else:
                     path.append((x + off, y + off, z))
-            # a touch faster than the player's normal pace so they must be
-            # out-boosted, but still catchable (player boost = BOOST_SPEED)
-            e = Enemy(path, random.uniform(6.0, 7.6))
+            # rivals push harder than the player's cruise speed (difficulty):
+            # you must boost, grab kits and use the gun to stay ahead
+            e = Enemy(path, random.uniform(C.ENEMY_SPEED_MIN, C.ENEMY_SPEED_MAX))
             gx, gy = grid[i]
             e.pos = [gx, gy, C.CAR_GROUND_Z]
             self.enemies.append(e)
@@ -116,17 +125,36 @@ class Game:
         self.shield_kits = road[C.NUM_HEALTH_KITS:C.NUM_HEALTH_KITS + C.NUM_SHIELD_KITS]
         i = C.NUM_HEALTH_KITS + C.NUM_SHIELD_KITS
         self.bombs = list(road[i:i + C.NUM_BOMBS])
-        self._spawn_trees()
+        self._spawn_scenery()
 
-    def _spawn_trees(self):
-        self.trees = []
-        tries = 0
-        while len(self.trees) < C.NUM_TREES and tries < 1500:
-            tries += 1
-            x = random.uniform(-6500, 6500)
-            y = random.uniform(-6500, 5500)
-            if not self.track.is_on_road(x, y, radius2=90000):
-                self.trees.append((x, y))
+    def _spawn_scenery(self):
+        """Scatter trees, rocks, lakes and horizon hills clear of the track."""
+        self.trees, self.rocks, self.lakes, self.hills = [], [], [], []
+
+        def _place(store, count, xr, yr, clear2, extra=None, tries_mul=25):
+            tries = 0
+            while len(store) < count and tries < count * tries_mul:
+                tries += 1
+                x = random.uniform(-xr, xr)
+                y = random.uniform(-yr, yr)
+                if self.track.is_on_road(x, y, radius2=clear2):
+                    continue
+                store.append((x, y) if extra is None else extra(x, y))
+
+        _place(self.trees, C.NUM_TREES, 6500, 6500, 90000,
+               lambda x, y: (x, y, random.uniform(0.75, 1.4)))
+        _place(self.rocks, C.NUM_ROCKS, 6800, 6800, 45000,
+               lambda x, y: (x, y, random.uniform(0.6, 1.5), random.uniform(0, 360)))
+        # lakes sit well off the racing surface
+        _place(self.lakes, C.NUM_LAKES, 6000, 6000, 700000,
+               lambda x, y: (x, y, random.uniform(420, 720), random.uniform(300, 520)))
+        # hills ring the far horizon for depth
+        for _ in range(C.NUM_HILLS):
+            ang = random.uniform(0, 2 * math.pi)
+            dist = random.uniform(6500, 9500)
+            x, y = math.cos(ang) * dist, math.sin(ang) * dist
+            self.hills.append((x, y, random.uniform(700, 1500),
+                               random.uniform(260, 520)))
 
     def flash(self, msg, seconds=2.5):
         self.message = msg
@@ -190,7 +218,14 @@ class Game:
         now = time.time()
         if self.state == COUNTDOWN:
             # rivals idle on the grid until the flag drops
-            if self.countdown_value() is None:
+            cv = self.countdown_value()
+            if cv != self._last_count:               # one beep per tick
+                if cv == "GO!":
+                    audio.play('go', 0.9)
+                elif cv is not None:
+                    audio.play('beep', 0.7)
+                self._last_count = cv
+            if cv is None:
                 self.state = PLAYING
             return
         if self.state != PLAYING:
@@ -223,6 +258,10 @@ class Game:
         else:
             p.speed = C.NORMAL_SPEED
 
+        # engine note tracks throttle; boost adds a whoosh
+        audio.set_engine(p.speed / C.BOOST_SPEED)
+        audio.set_boost(p.boost_active)
+
         protected = now < self.spawn_protect_until
         a = math.radians(p.angle)
         fx, fy = math.cos(a), math.sin(a)
@@ -236,18 +275,27 @@ class Game:
                 p.lives = max(0, p.lives - 1)
                 self.wall_cd = now + 1.0
                 self.explosions.append(props.Explosion(old[0], old[1], 0.6))
+                audio.play('crash', 0.7)
                 if p.lives <= 0:
-                    self.state = LOSE
+                    self._lose()
 
         # enemies
         for e in self.enemies:
             if e.lives <= 0:
                 e.respawn()
             e.update()
+            # rivals track and shoot the player when tailgated too closely
+            shot = e.aim_and_maybe_fire(p, now)
+            if shot is not None:
+                self.bullets.append(shot)
+                audio.play('eshot', 0.5)
             if e.segment >= len(e.path) - 1 and not e.finished:
                 e.finished = True
                 if not p.finished:
                     self.state = ENEMY_WIN
+                    audio.play('crash', 0.7)
+                    audio.stop_engine()
+                    audio.set_boost(False)
         self._enemy_hazards(now)
         if not protected:
             self._enemy_player_collisions()
@@ -260,6 +308,13 @@ class Game:
 
         # cull dead explosions
         self.explosions = [e for e in self.explosions if e.alive]
+
+    def _lose(self):
+        """Transition to the wreck screen with the appropriate audio sting."""
+        self.state = LOSE
+        audio.play('explosion', 0.9)
+        audio.stop_engine()
+        audio.set_boost(False)
 
     def _update_jump(self, now):
         p = self.player
@@ -306,8 +361,9 @@ class Game:
                 if not p.shield_active and now >= self.bump_cd:
                     p.lives = max(0, p.lives - 1)
                     self.bump_cd = now + 1.0
+                    audio.play('crash', 0.55)
                     if p.lives <= 0:
-                        self.state = LOSE
+                        self._lose()
 
     def _enemy_hazards(self, now):
         """Keep rivals from clipping into each other and let them jump humps."""
@@ -349,6 +405,7 @@ class Game:
             if math.hypot(px - hx, py - hy) < 55 and p.lives < C.PLAYER_MAX_LIVES:
                 p.lives += 1
                 self.flash("+1 LIFE", 1.2)
+                audio.play('pickup', 0.8)
             else:
                 remaining.append((hx, hy))
         self.health_kits = remaining
@@ -359,6 +416,7 @@ class Game:
                 p.shield_active = True
                 p.shield_start = now
                 self.flash("SHIELD ON", 1.5)
+                audio.play('shield', 0.8)
             else:
                 remaining.append((sx, sy))
         self.shield_kits = remaining
@@ -367,10 +425,11 @@ class Game:
         for (bx, by) in self.bombs:
             if math.hypot(px - bx, py - by) < 30:
                 self.explosions.append(props.Explosion(bx, by))
+                audio.play('explosion', 0.7)
                 if not p.shield_active:
                     p.lives = max(0, p.lives - 1)
                     if p.lives <= 0:
-                        self.state = LOSE
+                        self._lose()
             else:
                 remaining.append((bx, by))
         self.bombs = remaining
@@ -383,27 +442,56 @@ class Game:
                     p.jump_active = True
                     p.jump_start = now
                     self.breaker_cd = now + 1.2
+                    # Legacy parity: a gentle roll-over is harmless, but taking
+                    # a hump at speed launches the car AND costs a life (the
+                    # "too much speed + speed breaker = hazard" rule).
                     if p.speed <= C.SLOW_SPEED + 0.1:
                         p.jump_mode = "hit"
+                        audio.play('crash', 0.25)
                     else:
                         p.jump_mode = "jump"
+                        fast = p.speed >= C.BREAKER_FAST_SPEED
                         p.boost_active = False        # kills a boost; slows you
+                        p.speed = C.NORMAL_SPEED * 0.8
+                        audio.play('crash', 0.6)
+                        if fast and not p.shield_active:
+                            p.lives = max(0, p.lives - C.BREAKER_FAST_DAMAGE)
+                            self.explosions.append(props.Explosion(px, py, 0.5))
+                            self.flash("SPEED BREAKER!", 1.2)
+                            if p.lives <= 0:
+                                self._lose()
                     break
 
     def _update_bullets(self):
         alive = []
-        for b in self.bullets:
+        now = time.time()
+        p = self.player
+        protected = now < self.spawn_protect_until
+        for b in list(self.bullets):
             b.advance()
-            hit = None
-            for e in self.enemies:
-                if math.hypot(b.x - e.pos[0], b.y - e.pos[1]) < C.BULLET_HIT_RADIUS:
-                    hit = e
-                    break
-            if hit:
-                hit.lives -= 1
-                hit.slow_until = time.time() + 2.0
-                self.explosions.append(props.Explosion(b.x, b.y, 0.5))
-                continue
+            if b.team == "player":
+                hit = None
+                for e in self.enemies:
+                    if math.hypot(b.x - e.pos[0], b.y - e.pos[1]) < C.BULLET_HIT_RADIUS:
+                        hit = e
+                        break
+                if hit:
+                    hit.lives -= 1
+                    hit.slow_until = now + 2.0
+                    self.explosions.append(props.Explosion(b.x, b.y, 0.5))
+                    audio.play('explosion', 0.35)
+                    continue
+            else:  # enemy round -> can wound the player
+                if (not protected and
+                        math.hypot(b.x - p.pos[0], b.y - p.pos[1]) < C.BULLET_HIT_RADIUS):
+                    self.explosions.append(props.Explosion(b.x, b.y, 0.5))
+                    if not p.shield_active:
+                        p.lives = max(0, p.lives - C.ENEMY_BULLET_DAMAGE)
+                        audio.play('crash', 0.6)
+                        self.flash("HIT!", 0.8)
+                        if p.lives <= 0:
+                            self._lose()
+                    continue
             if -70000 < b.x < 70000 and -70000 < b.y < 70000:
                 alive.append(b)
         self.bullets = alive
@@ -433,6 +521,10 @@ class Game:
         if heading_dot > 0.3:                 # crossing the correct way
             p.finished = True
             self.state = WIN
+            audio.play('go', 1.0)
+            audio.play('pickup', 0.9)
+            audio.stop_engine()
+            audio.set_boost(False)
         elif heading_dot < -0.3 and time.time() >= self.breaker_cd:
             self.flash("WRONG WAY - turn around!", 1.5)
 
@@ -440,18 +532,26 @@ class Game:
         if self.state != PLAYING:
             return
         p = self.player
-        a = math.radians(p.angle)
+        a = math.radians(p.bullet_angle())
         self.bullets.append(Bullet(p.pos[0] + C.CAR_LENGTH / 2 * math.cos(a),
                                    p.pos[1] + C.CAR_LENGTH / 2 * math.sin(a),
-                                   30, p.bullet_angle()))
+                                   30, p.bullet_angle(), team="player"))
+        audio.play('shot', 0.6)
 
     # ------------------------------------------------------------------ render
     def draw_world(self):
         gfx.place_lights()
         gfx.draw_ground()
+        # distant scenery first (hills sit on the horizon, lakes on the ground)
+        for (hx, hy, r, h) in self.hills:
+            props.draw_hill(hx, hy, r, h)
+        for (lx, ly, rx, ry) in self.lakes:
+            props.draw_lake(lx, ly, rx, ry)
         self.track.draw()
-        for (tx, ty) in self.trees:
-            props.draw_tree(tx, ty)
+        for (rx, ry, rs, ra) in self.rocks:
+            props.draw_rock(rx, ry, rs, ra)
+        for (tx, ty, ts) in self.trees:
+            props.draw_tree(tx, ty, ts)
         for (sx, sy, w, d) in self.track.speed_breakers:
             props.draw_speed_breaker(sx, sy, w, d)
         for (hx, hy) in self.health_kits:
@@ -531,16 +631,20 @@ def _key_down(key, x, y):
     if k == b'p':
         if g.state == PLAYING:
             g.state = PAUSED
+            audio.set_engine(0.0)
+            audio.set_boost(False)
         elif g.state == PAUSED:
             g.state = PLAYING
     elif k == b'r':
         g.start_race(g.track.layout_id)
     elif k == b'm':
         g.state = MENU
+        audio.stop_engine()
     elif k == b'v':
         g.fpv = not g.fpv
     elif k == b'\x1b':
         g.state = MENU
+        audio.stop_engine()
     elif k == b'w':
         g.player.boost_active = True
         g.player.boost_start = time.time()
@@ -604,6 +708,7 @@ def run():
 
     gfx.init_gl()
     glutIgnoreKeyRepeat(1)
+    audio.init()
 
     APP = Game()
 
