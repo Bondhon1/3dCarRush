@@ -65,6 +65,8 @@ class Game:
         self.wall_cd = 0.0             # cooldown so one wall crash costs one life
         self._last_count = None        # last countdown value we beeped for
         self._last_update = None        # wall-clock of the previous update tick
+        self.logo = None               # menu logo texture (lazily loaded)
+        self.logo_loaded = False
 
     # ------------------------------------------------------------------ setup
     def start_race(self, layout_id):

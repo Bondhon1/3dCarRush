@@ -5,6 +5,8 @@ proper surface normals so OpenGL's lighting model gives them real shading and
 highlights instead of the flat, unlit look of the legacy game.
 """
 
+import os
+import sys
 import math
 import time as _time
 from OpenGL.GL import *
@@ -90,6 +92,58 @@ def clear_emissive():
 
 def lighting(enabled):
     (glEnable if enabled else glDisable)(GL_LIGHTING)
+
+
+# ---------------------------------------------------------------------------
+# Textures (used for the menu logo). Everything degrades to None on failure so
+# the menu can fall back to vector text.
+# ---------------------------------------------------------------------------
+def resource_path(rel):
+    """Resolve a bundled asset both when run from source and from a frozen
+    PyInstaller exe (which unpacks data files to ``sys._MEIPASS``)."""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        p = os.path.join(base, rel)
+        if os.path.exists(p):
+            return p
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(root, rel)
+
+
+def load_texture(rel):
+    """Load an image asset into a GL texture. Returns (tex_id, w, h) or None."""
+    try:
+        import pygame
+        surf = pygame.image.load(resource_path(rel))
+        w, h = surf.get_size()
+        data = pygame.image.tostring(surf, "RGBA", True)   # flipped for GL
+        tid = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, tid)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, data)
+        glBindTexture(GL_TEXTURE_2D, 0)
+        return tid, w, h
+    except Exception:
+        return None
+
+
+def draw_texture(tid, x, y, w, h, alpha=1.0):
+    """Draw a textured quad in the current 2D overlay (call inside begin_2d)."""
+    glEnable(GL_TEXTURE_2D)
+    glBindTexture(GL_TEXTURE_2D, tid)
+    glColor4f(1.0, 1.0, 1.0, alpha)
+    glBegin(GL_QUADS)
+    glTexCoord2f(0, 0); glVertex2f(x, y)
+    glTexCoord2f(1, 0); glVertex2f(x + w, y)
+    glTexCoord2f(1, 1); glVertex2f(x + w, y + h)
+    glTexCoord2f(0, 1); glVertex2f(x, y + h)
+    glEnd()
+    glBindTexture(GL_TEXTURE_2D, 0)
+    glDisable(GL_TEXTURE_2D)
 
 
 # ---------------------------------------------------------------------------

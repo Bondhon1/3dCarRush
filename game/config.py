@@ -92,7 +92,7 @@ BREAKER_FAST_SPEED = NORMAL_SPEED + 0.5   # above this = a dangerous fast hit
 ENEMY_GUN_RANGE = 620.0        # will only shoot the player within this distance
 ENEMY_GUN_FOV = 0.35           # aim tolerance (dot of turret vs. line-to-player)
 ENEMY_BULLET_SPEED = 26.0
-ENEMY_FIRE_COOLDOWN = 1.15     # seconds between an enemy's shots
+ENEMY_FIRE_COOLDOWN = 1.7      # seconds between an enemy's shots (fewer rounds/sec)
 ENEMY_BULLET_DAMAGE = 1
 ENEMY_GUN_TURN = 6.0           # deg/frame the enemy turret tracks the player
 

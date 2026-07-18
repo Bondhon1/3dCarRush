@@ -189,9 +189,23 @@ def draw_menu(g):
     glVertex2f(g.width, g.height); glVertex2f(0, g.height)
     glEnd()
 
-    gfx.big_text(g.width / 2, g.height - 170, "3D CAR RUSH", 0.42,
-                 C.COL_HUD_EDGE, 3.0)
-    gfx.text_centered(g.width / 2, g.height - 210,
+    # Brand logo (loaded once, cached on the game). Falls back to vector text
+    # if the asset or texturing is unavailable.
+    if not getattr(g, "logo_loaded", False):
+        g.logo = gfx.load_texture("assets/logo.png")
+        g.logo_loaded = True
+    if getattr(g, "logo", None):
+        tid, lw, lh = g.logo
+        dw = min(520, g.width - 160)
+        dh = dw * lh / lw
+        logo_bottom = g.height - 34 - dh
+        gfx.draw_texture(tid, g.width / 2 - dw / 2, logo_bottom, dw, dh)
+        sub_y = logo_bottom - 24
+    else:
+        gfx.big_text(g.width / 2, g.height - 110, "3D CAR RUSH", 0.42,
+                     C.COL_HUD_EDGE, 3.0)
+        sub_y = g.height - 150
+    gfx.text_centered(g.width / 2, sub_y,
                       "Outrun the rivals. Reach the finish first.",
                       C.COL_HUD_TEXT)
 
@@ -201,7 +215,7 @@ def draw_menu(g):
              "CIRCUIT 3  ·  Speedway"]
     cw, ch = 460, 60
     cx = g.width / 2
-    top = g.height - 280
+    top = sub_y - (ch + 22)         # `top` is the first card's lower edge
     for i, name in enumerate(names):
         y = top - i * (ch + 18)
         x0, x1 = cx - cw / 2, cx + cw / 2
