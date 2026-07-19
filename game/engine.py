@@ -55,6 +55,7 @@ class Game:
         self.checkpoint = None         # far-side gate that proves a real lap
         self.checkpoint_reached = False
         self.breaker_cd = 0.0
+        self.pothole_cd = 0.0          # one slowdown per pothole strike
         # held-key movement state
         self.brake = False
         self.turn_left = False
@@ -70,6 +71,11 @@ class Game:
 
     # ------------------------------------------------------------------ setup
     def start_race(self, layout_id):
+        # theme first: the track display list and the hill lists bake their
+        # colours, so the palette must be current before anything is built
+        C.set_theme(layout_id)
+        gfx.apply_theme()
+        props.reset_hill_cache()
         self.track.dispose()
         self.track.build(layout_id)
         self.player.reset()
@@ -79,7 +85,7 @@ class Game:
         self.explosions = []
         # lap checkpoint = the base waypoint farthest from the finish line
         fx, fy = self.track.finish_line['pos']
-        base = track_mod.enemy_base_waypoints(layout_id, fy)
+        base = self._racing_line(layout_id, fy)
         self.checkpoint = max(base, key=lambda w: (w[0] - fx) ** 2 + (w[1] - fy) ** 2)
         self.checkpoint_reached = False
         self.lap_waypoints = [(w[0], w[1]) for w in base]
@@ -97,9 +103,20 @@ class Game:
         audio.start_engine()
         audio.set_engine(0.2)
 
+    def _racing_line(self, layout_id, fy):
+        """Centre-line waypoints for a circuit.
+
+        Polygon-built tracks generate their own line (following the real
+        tarmac through arbitrary-angle bends); the legacy grid layouts use
+        their hand-authored waypoint list."""
+        auto = getattr(self.track, 'auto_waypoints', None)
+        if auto:
+            return list(auto) + [(0.0, fy + 40 * C.TRACK_SCALE, 10)]
+        return track_mod.enemy_base_waypoints(layout_id, fy)
+
     def _spawn_enemies(self, layout_id):
         fy = self.track.finish_line['pos'][1]
-        base = track_mod.enemy_base_waypoints(layout_id, fy)
+        base = self._racing_line(layout_id, fy)
         self.enemies = []
         S = C.TRACK_SCALE
         # each rival races a laterally-offset copy of the base racing line.
@@ -282,6 +299,8 @@ class Game:
             target_speed = C.SLOW_SPEED
         else:
             target_speed = C.NORMAL_SPEED
+        if now < p.pothole_until:            # bogged down in broken tarmac
+            target_speed *= C.POTHOLE_SLOW_FACTOR
         p.speed += (target_speed - p.speed) * min(1.0, C.SPEED_LERP * fs)
 
         # engine note tracks throttle; boost adds a whoosh
@@ -464,6 +483,17 @@ class Game:
             else:
                 remaining.append((bx, by))
         self.bombs = remaining
+        # potholes: clipping one costs you momentum for a couple of seconds.
+        # No damage -- it punishes a sloppy line rather than ending your race.
+        if not p.jump_active and now >= self.pothole_cd:
+            for (hx, hy, r, _pts) in self.track.potholes:
+                if math.hypot(px - hx, py - hy) < r + C.POTHOLE_HIT_RADIUS:
+                    p.pothole_until = now + C.POTHOLE_SLOW_TIME
+                    self.pothole_cd = now + 1.0
+                    audio.play('crash', 0.28)
+                    self.flash("POTHOLE!", 0.9)
+                    break
+
         # speed breakers: trigger zone matches the visible hump (depth d spans
         # +/- d/2 across Y). One bump per pass (cooldown); no life loss -- just
         # a jump and a brief loss of momentum if taken fast.
@@ -632,6 +662,12 @@ APP = None
 # ---------------------------------------------------------------------------
 # GLUT callbacks
 # ---------------------------------------------------------------------------
+def _preview_theme(g):
+    """Paint the menu backdrop in the highlighted circuit's colours."""
+    C.set_theme(g.menu_index + 1)
+    gfx.apply_theme()
+
+
 def _display():
     APP.display()
 
@@ -654,8 +690,9 @@ def _key_down(key, x, y):
     if g.state == MENU:
         if k in (b'\r', b'\n', b' '):
             g.start_race(g.menu_index + 1)
-        elif k in (b'1', b'2', b'3'):
+        elif k.isdigit() and 1 <= int(k) <= C.NUM_LAYOUTS:
             g.menu_index = int(k) - 1
+            _preview_theme(g)
         elif k == b'\x1b':
             sys.exit(0)
         return
@@ -709,6 +746,14 @@ def _key_up(key, x, y):
 
 def _special_down(key, x, y):
     g = APP
+    if g.state == MENU:                    # arrow keys pick a circuit
+        if key == GLUT_KEY_UP:
+            g.menu_index = (g.menu_index - 1) % C.NUM_LAYOUTS
+            _preview_theme(g)
+        elif key == GLUT_KEY_DOWN:
+            g.menu_index = (g.menu_index + 1) % C.NUM_LAYOUTS
+            _preview_theme(g)
+        return
     if key == GLUT_KEY_LEFT:
         g.gun_left = True
     elif key == GLUT_KEY_RIGHT:

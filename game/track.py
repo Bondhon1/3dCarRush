@@ -7,6 +7,7 @@ a display list so the static world is drawn in a single fast call each frame.
 """
 
 import math
+import random
 from OpenGL.GL import *
 
 from . import config as C
@@ -32,12 +33,19 @@ class Track:
         self.mini_points = []         # down-sampled road points for the minimap
         self.layout_id = 1
         self._list = None
+        # pre-generated surface damage (positions kept so gameplay can react)
+        self.potholes = []            # [(x, y, r, outline_pts)]
+        self.patches = []             # [(x, y, hw, hh)]
+        self.cracks = []              # [(polyline_pts, width)]
+        # racing line produced by the polygon builder (empty for legacy layouts)
+        self.auto_waypoints = []
 
     # -- public API --------------------------------------------------------
     def build(self, layout_id):
         self.__init__()
         self.layout_id = layout_id
-        {1: self._layout1, 2: self._layout2, 3: self._layout3}[layout_id]()
+        {1: self._layout1, 2: self._layout2, 3: self._layout3,
+         4: self._layout4, 5: self._layout5}[layout_id]()
         # Scale the non-geometry markers (finish + breakers) to match the
         # enlarged pieces. Their WIDTH/DEPTH stay unscaled (road width is fixed).
         S = C.TRACK_SCALE
@@ -45,6 +53,7 @@ class Track:
         self.finish_line['pos'] = (fx * S, fy * S)
         self.speed_breakers = [(x * S, y * S, w, d)
                                for (x, y, w, d) in self.speed_breakers]
+        self._generate_damage()
         self.mini_points = list(self.road_points)[::4]
 
     def draw(self):
@@ -136,6 +145,141 @@ class Track:
                            a0, a1, self.border_points, C.GRID)
         self.pieces.append(('curve', cx, cy, radius, a0, a1, width))
 
+    def _corner(self, X, Y, sx, sy, radius=200):
+        """Emit a 90-degree arc joining a vertical road at x=X to a horizontal
+        road at y=Y.
+
+        ``sx`` is the direction the HORIZONTAL leg runs away from the corner
+        (+1 = toward +X), ``sy`` the direction the VERTICAL leg runs (+1 = +Y).
+        The arc therefore meets the vertical road at y = Y + sy*radius and the
+        horizontal road at x = X + sx*radius -- author legs to those endpoints
+        and the circuit is guaranteed to join up.  Coordinates are unscaled;
+        ``_curve`` applies TRACK_SCALE.
+        """
+        cx, cy = X + sx * radius, Y + sy * radius
+        a_v = math.pi if sx > 0 else 0.0            # point on the vertical leg
+        a_h = -math.pi / 2 if sy > 0 else math.pi / 2   # point on the horizontal leg
+        d = a_h - a_v
+        while d > math.pi:
+            d -= 2 * math.pi
+        while d < -math.pi:
+            d += 2 * math.pi
+        self._curve(cx, cy, radius, a_v, a_v + d)
+
+    def _segment(self, x0, y0, x1, y1, width=C.ROAD_WIDTH):
+        """A straight running in ANY direction (not just axis-aligned).
+
+        This is what lets circuits leave the grid and use diagonals, so corners
+        no longer have to be 90 degrees."""
+        S = C.TRACK_SCALE
+        x0, y0, x1, y1 = x0 * S, y0 * S, x1 * S, y1 * S
+        dx, dy = x1 - x0, y1 - y0
+        L = math.hypot(dx, dy)
+        if L < 1:
+            return
+        ux, uy = dx / L, dy / L
+        px, py = -uy, ux                       # across the road
+        hw = width / 2
+        n = max(1, int(L / 20))
+        m = max(1, int(hw / 20))
+        for i in range(n + 1):
+            t = i / n
+            bx, by = x0 + dx * t, y0 + dy * t
+            for j in range(-m, m + 1):
+                o = j * 20
+                self.road_points.add((_round(bx + px * o, 20),
+                                      _round(by + py * o, 20)))
+        nb = max(1, int(L / C.GRID))
+        for side in (-1, 1):
+            for i in range(nb + 1):
+                t = i / nb
+                bx, by = x0 + dx * t, y0 + dy * t
+                k = -C.BORDER_THICKNESS
+                while k <= C.BORDER_THICKNESS:
+                    o = hw * side + k
+                    self.border_points.add((_round(bx + px * o, C.GRID),
+                                            _round(by + py * o, C.GRID)))
+                    k += C.GRID
+        self.pieces.append(('segment', x0, y0, x1, y1, width))
+
+    def _polygon_circuit(self, pts, radius=300, width=C.ROAD_WIDTH):
+        """Build a closed circuit through ``pts`` with every corner filleted.
+
+        Because the shape is a closed polygon the circuit is guaranteed to join
+        up, and because each corner is rounded by a tangent arc the turn angles
+        can be ANYTHING -- gentle sweepers, chicane kinks or tight hairpins --
+        instead of the 90-degree grid the older layouts were locked to.
+
+        Also records the centre-line racing line in ``auto_waypoints`` (scaled),
+        so the AI follows the real road rather than the raw polygon corners
+        (which can sit off the tarmac on sharp bends).
+        """
+        S = C.TRACK_SCALE
+        n = len(pts)
+        fil = []
+        for i in range(n):
+            p, c, q = pts[(i - 1) % n], pts[i], pts[(i + 1) % n]
+            v1 = (p[0] - c[0], p[1] - c[1])
+            v2 = (q[0] - c[0], q[1] - c[1])
+            l1 = math.hypot(*v1) or 1.0
+            l2 = math.hypot(*v2) or 1.0
+            u1 = (v1[0] / l1, v1[1] / l1)
+            u2 = (v2[0] / l2, v2[1] / l2)
+            dot = max(-1.0, min(1.0, u1[0] * u2[0] + u1[1] * u2[1]))
+            theta = math.acos(dot)                 # interior angle at the corner
+            if theta < 0.05 or abs(theta - math.pi) < 0.05:
+                fil.append(None)                   # effectively straight through
+                continue
+            t = radius / math.tan(theta / 2)
+            t = min(t, l1 * 0.45, l2 * 0.45)       # keep arcs off each other
+            r = t * math.tan(theta / 2)
+            if t < 5 or r < 5:
+                fil.append(None)
+                continue
+            T1 = (c[0] + u1[0] * t, c[1] + u1[1] * t)
+            T2 = (c[0] + u2[0] * t, c[1] + u2[1] * t)
+            bx, by = u1[0] + u2[0], u1[1] + u2[1]
+            bl = math.hypot(bx, by) or 1.0
+            d = r / math.sin(theta / 2)
+            cc = (c[0] + bx / bl * d, c[1] + by / bl * d)
+            a0 = math.atan2(T1[1] - cc[1], T1[0] - cc[0])
+            a1 = math.atan2(T2[1] - cc[1], T2[0] - cc[0])
+            da = a1 - a0
+            while da > math.pi:
+                da -= 2 * math.pi
+            while da < -math.pi:
+                da += 2 * math.pi
+            fil.append((T1, T2, cc, a0, a0 + da, r))
+
+        for f in fil:
+            if f:
+                T1, T2, cc, a0, a1, r = f
+                self._curve(cc[0], cc[1], r, a0, a1, width=width)
+        for i in range(n):
+            cur, nxt = fil[i], fil[(i + 1) % n]
+            start = cur[1] if cur else pts[i]
+            end = nxt[0] if nxt else pts[(i + 1) % n]
+            self._segment(start[0], start[1], end[0], end[1], width)
+
+        # racing line: leave corner 0, run the loop, come back through corner 0
+        wps = []
+
+        def arc_mid(f):
+            _, _, cc, a0, a1, r = f
+            am = (a0 + a1) / 2
+            return (cc[0] + r * math.cos(am), cc[1] + r * math.sin(am))
+
+        wps.append(fil[0][1] if fil[0] else pts[0])
+        for i in range(1, n):
+            f = fil[i]
+            if f:
+                wps.extend([f[0], arc_mid(f), f[1]])
+            else:
+                wps.append(pts[i])
+        if fil[0]:
+            wps.extend([fil[0][0], arc_mid(fil[0])])
+        self.auto_waypoints = [(x * S, y * S, 10) for (x, y) in wps]
+
     # -- geometry emission -------------------------------------------------
     def _emit(self):
         for p in self.pieces:
@@ -146,6 +290,9 @@ class Track:
                 self._emit_horizontal(*p[1:])
             elif kind == 'curve':
                 self._emit_curve(*p[1:])
+            elif kind == 'segment':
+                self._emit_segment(*p[1:])
+        self._draw_damage()               # wear sits on top of all the paint
         if self.finish_line:
             self._emit_finish(self.finish_line)
 
@@ -157,17 +304,164 @@ class Track:
             glVertex3f(*v)
         glEnd()
 
+    # -- broken / weathered asphalt -----------------------------------------
+    # All damage is baked into the display list (zero per-frame cost) and is
+    # driven by a seeded RNG so a given circuit always wears the same way.
+    # Drawn just above the lane paint (z=0.7) so holes and cracks visibly cut
+    # through the markings, the way real broken road does.
+    _DMG_Z = 0.70
+
+    # --- generation (at build time, so gameplay can collide with potholes) ---
+    def _gen_cluster(self, cx, cy, rng, big=True):
+        """One damage cluster: a ragged hole plus a few radiating cracks."""
+        r = rng.uniform(11, 26) if big else rng.uniform(9, 19)
+        pts = []
+        seg = 10
+        for i in range(seg):
+            a = 2 * math.pi * i / seg
+            rr = r * rng.uniform(0.62, 1.18)
+            pts.append((cx + rr * math.cos(a), cy + rr * math.sin(a)))
+        self.potholes.append((cx, cy, r, pts))
+        for _ in range(rng.randint(2, 4)):
+            ang = rng.uniform(0, 2 * math.pi)
+            length = rng.uniform(50, 130)
+            n = rng.randint(3, 6)
+            seg_len = length / n
+            poly = [(cx, cy)]
+            px, py = cx, cy
+            for _ in range(n):
+                a = ang + rng.uniform(-0.55, 0.55)
+                px, py = px + seg_len * math.cos(a), py + seg_len * math.sin(a)
+                poly.append((px, py))
+            self.cracks.append((poly, 3.2))
+
+    def _gen_damage_rect(self, x0, x1, y0, y1, rng):
+        x0, x1 = min(x0, x1), max(x0, x1)
+        y0, y1 = min(y0, y1), max(y0, y1)
+        inset = 34.0
+        if x1 - x0 < 2 * inset or y1 - y0 < 2 * inset:
+            return
+        area = (x1 - x0) * (y1 - y0)
+        for _ in range(int(area / C.ROAD_PATCH_AREA)):
+            self.patches.append((rng.uniform(x0 + inset, x1 - inset),
+                                 rng.uniform(y0 + inset, y1 - inset),
+                                 rng.uniform(26, 60), rng.uniform(26, 60)))
+        for _ in range(int(area / C.ROAD_DAMAGE_AREA)):
+            self._gen_cluster(rng.uniform(x0 + inset, x1 - inset),
+                              rng.uniform(y0 + inset, y1 - inset), rng)
+
+    def _gen_damage_arc(self, cx, cy, r_in, r_out, a0, a1, rng):
+        span = abs(a1 - a0) * (r_in + r_out) / 2
+        area = span * (r_out - r_in)
+        pad = 30.0
+        if r_out - r_in < 2 * pad:
+            return
+        for _ in range(int(area / C.ROAD_DAMAGE_AREA)):
+            a = a0 + (a1 - a0) * rng.random()
+            r = rng.uniform(r_in + pad, r_out - pad)
+            self._gen_cluster(cx + r * math.cos(a), cy + r * math.sin(a),
+                              rng, big=False)
+
+    def _gen_damage_seg(self, x0, y0, x1, y1, width, rng):
+        """Damage along an arbitrary-direction segment (oriented placement)."""
+        dx, dy = x1 - x0, y1 - y0
+        L = math.hypot(dx, dy)
+        if L < 80:
+            return
+        ux, uy = dx / L, dy / L
+        px, py = -uy, ux
+        hw = width / 2 - 34
+        if hw <= 0:
+            return
+        area = L * width
+        for _ in range(int(area / C.ROAD_PATCH_AREA)):
+            t = rng.uniform(40, L - 40)
+            o = rng.uniform(-hw, hw)
+            self.patches.append((x0 + ux * t + px * o, y0 + uy * t + py * o,
+                                 rng.uniform(26, 55), rng.uniform(26, 55)))
+        for _ in range(int(area / C.ROAD_DAMAGE_AREA)):
+            t = rng.uniform(40, L - 40)
+            o = rng.uniform(-hw, hw)
+            self._gen_cluster(x0 + ux * t + px * o, y0 + uy * t + py * o, rng)
+
+    def _generate_damage(self):
+        """Walk every emitted piece and scatter wear across it (seeded)."""
+        rng = random.Random(self.layout_id * 7919 + 13)
+        self.potholes, self.patches, self.cracks = [], [], []
+        for p in self.pieces:
+            kind = p[0]
+            if kind == 'straight':
+                cx, sy, length, width = p[1], p[2], p[3], p[4]
+                hw = width / 2
+                self._gen_damage_rect(cx - hw, cx + hw, sy, sy + length, rng)
+            elif kind == 'horizontal':
+                cy, sx, length, width = p[1], p[2], p[3], p[4]
+                hw = width / 2
+                self._gen_damage_rect(sx, sx + length, cy - hw, cy + hw, rng)
+            elif kind == 'curve':
+                cx, cy, radius, a0, a1, width = p[1], p[2], p[3], p[4], p[5], p[6]
+                hw = width / 2
+                lo, hi = (a0, a1) if a1 >= a0 else (a1, a0)
+                self._gen_damage_arc(cx, cy, radius - hw, radius + hw, lo, hi, rng)
+            elif kind == 'segment':
+                self._gen_damage_seg(p[1], p[2], p[3], p[4], p[5], rng)
+
+    # --- drawing (from the pre-generated data) ------------------------------
+    def _draw_damage(self):
+        glNormal3f(0, 0, 1)
+        for (cx, cy, hw, hh) in self.patches:
+            glColor3f(*C.COL_ROAD_CRACK)
+            glBegin(GL_QUADS)
+            glVertex3f(cx - hw - 3, cy - hh - 3, self._DMG_Z)
+            glVertex3f(cx + hw + 3, cy - hh - 3, self._DMG_Z)
+            glVertex3f(cx + hw + 3, cy + hh + 3, self._DMG_Z)
+            glVertex3f(cx - hw - 3, cy + hh + 3, self._DMG_Z)
+            glEnd()
+            glColor3f(*C.COL_ROAD_PATCH)
+            glBegin(GL_QUADS)
+            glVertex3f(cx - hw, cy - hh, self._DMG_Z + 0.02)
+            glVertex3f(cx + hw, cy - hh, self._DMG_Z + 0.02)
+            glVertex3f(cx + hw, cy + hh, self._DMG_Z + 0.02)
+            glVertex3f(cx - hw, cy + hh, self._DMG_Z + 0.02)
+            glEnd()
+
+        glColor3f(*C.COL_ROAD_CRACK)
+        for (poly, width) in self.cracks:
+            w = width
+            for i in range(len(poly) - 1):
+                (ax, ay), (bx, by) = poly[i], poly[i + 1]
+                dx, dy = bx - ax, by - ay
+                L = math.hypot(dx, dy) or 1.0
+                ox, oy = -dy / L * w / 2, dx / L * w / 2
+                glBegin(GL_QUADS)
+                glVertex3f(ax - ox, ay - oy, self._DMG_Z + 0.02)
+                glVertex3f(ax + ox, ay + oy, self._DMG_Z + 0.02)
+                glVertex3f(bx + ox, by + oy, self._DMG_Z + 0.02)
+                glVertex3f(bx - ox, by - oy, self._DMG_Z + 0.02)
+                glEnd()
+                w = max(1.2, w * 0.8)      # cracks taper as they run out
+
+        for (cx, cy, r, pts) in self.potholes:
+            for scale, color, z in ((1.30, C.COL_ROAD_GRIT, self._DMG_Z),
+                                    (1.00, C.COL_ROAD_CRACK, self._DMG_Z + 0.03),
+                                    (0.62, C.COL_ROAD_HOLE, self._DMG_Z + 0.05)):
+                glColor3f(*color)
+                glBegin(GL_POLYGON)
+                for (px, py) in pts:
+                    glVertex3f(cx + (px - cx) * scale, cy + (py - cy) * scale, z)
+                glEnd()
+
     def _road_slab(self, x0, x1, y0, y1):
         self._quad([(x0, y0, 0.1), (x1, y0, 0.1), (x1, y1, 0.1), (x0, y1, 0.1)],
-                   C.COL_ROAD)
+                   C.T('road'))
         # darker feather along both long edges for a worn-asphalt read
         f = 26
         if abs(x1 - x0) > abs(y1 - y0):   # horizontal slab
-            self._quad([(x0, y0, 0.12), (x1, y0, 0.12), (x1, y0 + f, 0.12), (x0, y0 + f, 0.12)], C.COL_ROAD_EDGE)
-            self._quad([(x0, y1 - f, 0.12), (x1, y1 - f, 0.12), (x1, y1, 0.12), (x0, y1, 0.12)], C.COL_ROAD_EDGE)
+            self._quad([(x0, y0, 0.12), (x1, y0, 0.12), (x1, y0 + f, 0.12), (x0, y0 + f, 0.12)], C.T('road_edge'))
+            self._quad([(x0, y1 - f, 0.12), (x1, y1 - f, 0.12), (x1, y1, 0.12), (x0, y1, 0.12)], C.T('road_edge'))
         else:
-            self._quad([(x0, y0, 0.12), (x0 + f, y0, 0.12), (x0 + f, y1, 0.12), (x0, y1, 0.12)], C.COL_ROAD_EDGE)
-            self._quad([(x1 - f, y0, 0.12), (x1, y0, 0.12), (x1, y1, 0.12), (x1 - f, y1, 0.12)], C.COL_ROAD_EDGE)
+            self._quad([(x0, y0, 0.12), (x0 + f, y0, 0.12), (x0 + f, y1, 0.12), (x0, y1, 0.12)], C.T('road_edge'))
+            self._quad([(x1 - f, y0, 0.12), (x1, y0, 0.12), (x1, y1, 0.12), (x1 - f, y1, 0.12)], C.T('road_edge'))
 
     def _kerb_line(self, ax, ay, bx, by):
         """Striped raised kerb from A to B (a thin 3D box strip)."""
@@ -184,7 +478,7 @@ class Track:
         for i in range(n):
             s0 = i * seg
             s1 = s0 + seg
-            color = C.COL_BORDER_A if i % 2 == 0 else C.COL_BORDER_B
+            color = C.T('kerb_a') if i % 2 == 0 else C.T('kerb_b')
             cx0, cy0 = ax + ux * s0, ay + uy * s0
             cx1, cy1 = ax + ux * s1, ay + uy * s1
             l0 = (cx0 - px * t / 2, cy0 - py * t / 2)
@@ -208,7 +502,7 @@ class Track:
         ux, uy = dx / length, dy / length
         px, py = -uy, ux
         s = 0
-        glColor3f(*C.COL_LANE)
+        glColor3f(*C.T('lane'))
         glNormal3f(0, 0, 1)
         glBegin(GL_QUADS)
         while s < length:
@@ -240,11 +534,29 @@ class Track:
         for lane_y in (cy - 100, cy, cy + 100):
             self._lane_dashes_line(start_x, lane_y, end_x, lane_y)
 
+    def _emit_segment(self, x0, y0, x1, y1, width):
+        dx, dy = x1 - x0, y1 - y0
+        L = math.hypot(dx, dy) or 1.0
+        ux, uy = dx / L, dy / L
+        px, py = -uy, ux
+        hw = width / 2
+        a = (x0 + px * hw, y0 + py * hw)
+        b = (x1 + px * hw, y1 + py * hw)
+        c = (x1 - px * hw, y1 - py * hw)
+        d = (x0 - px * hw, y0 - py * hw)
+        self._quad([(a[0], a[1], 0.1), (b[0], b[1], 0.1),
+                    (c[0], c[1], 0.1), (d[0], d[1], 0.1)], C.T('road'))
+        self._kerb_line(a[0], a[1], b[0], b[1])
+        self._kerb_line(d[0], d[1], c[0], c[1])
+        for o in (-hw / 2, 0.0, hw / 2):
+            self._lane_dashes_line(x0 + px * o, y0 + py * o,
+                                   x1 + px * o, y1 + py * o)
+
     def _emit_curve(self, cx, cy, radius, a0, a1, width):
         hw = width / 2
         inner, outer = radius - hw, radius + hw
         segs = 40
-        glColor3f(*C.COL_ROAD)
+        glColor3f(*C.T('road'))
         glNormal3f(0, 0, 1)
         glBegin(GL_QUAD_STRIP)
         for i in range(segs + 1):
@@ -257,7 +569,7 @@ class Track:
         self._emit_arc_kerb(cx, cy, inner, a0, a1)
         self._emit_arc_kerb(cx, cy, outer, a0, a1)
         # centre lane dashes
-        glColor3f(*C.COL_LANE)
+        glColor3f(*C.T('lane'))
         glBegin(GL_QUADS)
         n = 16
         for i in range(0, n, 2):
@@ -283,7 +595,7 @@ class Track:
         for i in range(n):
             b0 = a0 + (a1 - a0) * i / n
             b1 = a0 + (a1 - a0) * (i + 1) / n
-            color = C.COL_BORDER_A if i % 2 == 0 else C.COL_BORDER_B
+            color = C.T('kerb_a') if i % 2 == 0 else C.T('kerb_b')
             c0, s0 = math.cos(b0), math.sin(b0)
             c1, s1 = math.cos(b1), math.sin(b1)
             ri, ro = r - t / 2, r + t / 2
@@ -383,6 +695,41 @@ class Track:
         self.finish_line = {'pos': (0, -L - 2400 + 40), 'angle': 0, 'width': 450}
         self.speed_breakers = [(-5200, -2400, 400, 150)]
 
+    def _layout4(self):
+        """Alpine Forest -- a flowing, open circuit of sweeping diagonal bends.
+
+        Built as a filleted polygon, so none of these corners is a right angle:
+        the track leans and arcs the whole way round."""
+        self._polygon_circuit([
+            (0, -1000),        # below the start line
+            (0, 900),          # north up the start straight
+            (-1300, 2050),     # sweeping left onto a diagonal
+            (-2950, 1500),
+            (-3250, -400),     # long west run
+            (-1850, -1550),
+            (-600, -1650),     # back across the south
+        ], radius=340)
+        self.finish_line = {'pos': (0, -500), 'angle': 0, 'width': 450}
+        self.speed_breakers = [(0, 300, 400, 150)]
+
+    def _layout5(self):
+        """Canyon Sunset -- a technical circuit built around a tight hairpin.
+
+        The sharp polygon corner near the west end fillets down into a genuine
+        U-turn, with gentler sweepers everywhere else."""
+        self._polygon_circuit([
+            (0, -1250),        # below the start line
+            (0, 800),          # north up the start straight
+            (-1150, 1850),     # sweeper left
+            (-2650, 1250),
+            (-2400, -150),     # drops south
+            (-3450, -1250),    # sharp corner -> hairpin
+            (-1950, -1950),
+            (-300, -1950),     # long southern run home
+        ], radius=300)
+        self.finish_line = {'pos': (0, -700), 'angle': 0, 'width': 450}
+        self.speed_breakers = [(0, 200, 400, 150)]
+
 
 # Enemy waypoint paths per layout (ported from legacy get_enemy_paths_for_layout).
 # ``finish_y`` arrives ALREADY scaled (it comes from the scaled finish line), so
@@ -402,5 +749,7 @@ def enemy_base_waypoints(layout_id, finish_y):
         return [P(0, -600), P(30, 800), P(-6200, 800),
                 P(-6200, -4800), P(-3600, -4800),
                 P(-3600, -3200), P(0, -3200), last]
+    # Layouts 4 and 5 are polygon-built: they generate their own racing line in
+    # Track.auto_waypoints (see Game._racing_line), so they need no entry here.
     return [P(0, -600), P(0, 800), P(-5200, 800),
             P(-5200, -3200), P(0, -3200), last]

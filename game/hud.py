@@ -209,15 +209,15 @@ def draw_menu(g):
                       "Outrun the rivals. Reach the finish first.",
                       C.COL_HUD_TEXT)
 
-    # three track cards
-    names = ["CIRCUIT 1  ·  Figure Eight",
-             "CIRCUIT 2  ·  Long Loop",
-             "CIRCUIT 3  ·  Speedway"]
-    cw, ch = 460, 60
+    # track cards -- named after each circuit's theme so the list tells you
+    # what world you're picking, not just a number
+    names = [f"CIRCUIT {i}  ·  {C.THEMES[i]['name']}"
+             for i in range(1, C.NUM_LAYOUTS + 1)]
+    cw, ch = 460, 52
     cx = g.width / 2
     top = sub_y - (ch + 22)         # `top` is the first card's lower edge
     for i, name in enumerate(names):
-        y = top - i * (ch + 18)
+        y = top - i * (ch + 12)
         x0, x1 = cx - cw / 2, cx + cw / 2
         sel = (i == g.menu_index)
         bg = (0.10, 0.30, 0.36, 0.92) if sel else (0.08, 0.10, 0.14, 0.85)
@@ -230,7 +230,7 @@ def draw_menu(g):
             gfx.text(x1 - 54, y + ch / 2 - 6, "RACE", C.COL_HUD_EDGE)
 
     gfx.text_centered(g.width / 2, 70,
-                      "1 / 2 / 3 select      ENTER or CLICK to race",
+                      "1-5 or UP/DOWN select      ENTER or CLICK to race",
                       C.COL_HUD_WARN)
     gfx.text_centered(g.width / 2, 44,
                       "Drive WASD    Aim ARROWS    Fire SPACE    View V",

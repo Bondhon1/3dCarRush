@@ -197,9 +197,9 @@ def draw_tree(x, y, scale=1.0):
     glScalef(scale, scale, scale)
     glColor3f(0.45, 0.28, 0.12)
     gfx.capped_cylinder(9, 58, 10)
-    tiers = [(58, 42, 60, (0.10, 0.42, 0.14)),
-             (92, 36, 56, (0.12, 0.52, 0.16)),
-             (124, 28, 50, (0.14, 0.60, 0.18))]
+    dark, light = C.T('tree_dark'), C.T('tree_light')
+    mid = tuple((dark[i] + light[i]) / 2 for i in range(3))
+    tiers = [(58, 42, 60, dark), (92, 36, 56, mid), (124, 28, 50, light)]
     for z, r, h, col in tiers:
         glColor3f(*col)
         glPushMatrix(); glTranslatef(0, 0, z)
@@ -231,6 +231,17 @@ def draw_rock(x, y, scale=1.0, rot=0.0):
 # ---------------------------------------------------------------------------
 _HILL_LISTS = {}
 _HILL_SEEDS = 6
+
+
+def reset_hill_cache():
+    """Drop the baked hill lists so they re-bake in the new circuit's theme."""
+    global _HILL_LISTS
+    for lid in _HILL_LISTS.values():
+        try:
+            glDeleteLists(lid, 1)
+        except Exception:
+            pass
+    _HILL_LISTS = {}
 
 
 def _v_sub(a, b):
@@ -304,7 +315,7 @@ def _build_hill_list(seed):
     def vcolor(i, j):
         p, n = pos[i][j], nrm[i][j]
         hn = min(1.0, p[2] / zmax)
-        col = _lerp3(C.COL_HILL_LOW, C.COL_HILL_HIGH, hn ** 0.8)
+        col = _lerp3(C.T('hill_low'), C.T('hill_high'), hn ** 0.8)
         slope = 1.0 - max(0.0, min(1.0, n[2]))            # 0 flat .. 1 steep
         col = _lerp3(col, C.COL_HILL_ROCK, min(0.65, slope * 1.1))
         jit = (rng.random() - 0.5) * 0.05

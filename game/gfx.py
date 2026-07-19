@@ -64,7 +64,6 @@ def init_gl():
     # Distance fog blends the far world into the horizon haze.
     glEnable(GL_FOG)
     glFogi(GL_FOG_MODE, GL_LINEAR)
-    glFogfv(GL_FOG_COLOR, (*C.COL_FOG, 1.0))
     glFogf(GL_FOG_START, 1400.0)
     glFogf(GL_FOG_END, 5200.0)
 
@@ -72,7 +71,13 @@ def init_gl():
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
     glEnable(GL_LINE_SMOOTH)
     glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)
-    glClearColor(*C.COL_SKY_HORIZON, 1.0)
+    apply_theme()
+
+
+def apply_theme():
+    """Push the active circuit theme into the fixed GL state (fog + clear)."""
+    glFogfv(GL_FOG_COLOR, (*C.T('fog'), 1.0))
+    glClearColor(*C.T('sky_horizon'), 1.0)
 
 
 def place_lights():
@@ -225,15 +230,15 @@ def draw_sky(width, height, horizon_frac=0.55, yaw=0.0):
     glLoadIdentity()
 
     hy = height * horizon_frac
-    top = C.COL_SKY_TOP
-    hor = C.COL_SKY_HORIZON
+    top = C.T('sky_top')
+    hor = C.T('sky_horizon')
     glBegin(GL_QUADS)
     # upper sky: top colour -> horizon colour
     glColor3f(*top);  glVertex2f(0, height);   glVertex2f(width, height)
     glColor3f(*hor);  glVertex2f(width, hy);   glVertex2f(0, hy)
     glEnd()
     # lower band: horizon haze -> a touch darker toward the bottom edge
-    fog = C.COL_FOG
+    fog = C.T('fog')
     glBegin(GL_QUADS)
     glColor3f(*hor);  glVertex2f(0, hy);       glVertex2f(width, hy)
     glColor3f(*fog);  glVertex2f(width, 0);    glVertex2f(0, 0)
@@ -304,8 +309,9 @@ def _draw_wrapped(base, shift, period, width, y, fn, arg, margin=260):
 
 
 def _draw_sun(cx, cy, height):
-    _radial(cx, cy, height * 0.18, (1.0, 0.80, 0.48, 0.5), (1.0, 0.80, 0.48, 0.0))
-    _radial(cx, cy, height * 0.055, (1.0, 0.97, 0.86, 0.95), (1.0, 0.95, 0.8, 0.0))
+    s = C.T('sun')
+    _radial(cx, cy, height * 0.18, (*s, 0.5), (*s, 0.0))
+    _radial(cx, cy, height * 0.055, (1.0, 0.97, 0.86, 0.95), (*s, 0.0))
 
 
 def _cloud(cx, cy, r):
@@ -329,8 +335,8 @@ def draw_ground(size=8000 * C.TRACK_SCALE, tile=500.0):
     size so its density looks the same at any scale."""
     glNormal3f(0, 0, 1)
     step = tile
-    g1 = C.COL_GROUND
-    g2 = tuple(min(1.0, c + 0.05) for c in C.COL_GROUND)
+    g1 = C.T('ground')
+    g2 = tuple(min(1.0, c + 0.05) for c in g1)
     y = -size
     row = 0
     glBegin(GL_QUADS)

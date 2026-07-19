@@ -26,6 +26,18 @@ GRID = 8                       # collision grid resolution for road/border sets
 # comfortably wide while the laps get bigger and the corners more sweeping).
 TRACK_SCALE = 1.5
 
+NUM_LAYOUTS = 5                # selectable circuits on the start menu
+
+# Broken-road detailing. One "damage cluster" (pothole + cracks + grit) is
+# scattered per this many square world-units of asphalt; lower = rougher road.
+ROAD_DAMAGE_AREA = 136000.0    # halved density -- potholes are an event, not a texture
+ROAD_PATCH_AREA = 210000.0     # resurfaced repair squares are rarer
+
+# Hitting a pothole costs you momentum (no damage, just a bogged-down moment).
+POTHOLE_SLOW_TIME = 2.0        # seconds
+POTHOLE_SLOW_FACTOR = 0.8      # 20% slower while it lasts
+POTHOLE_HIT_RADIUS = 14.0      # extra reach beyond the hole's own radius
+
 # ---------------------------------------------------------------------------
 # Car dimensions (world units)
 # ---------------------------------------------------------------------------
@@ -121,6 +133,11 @@ COL_GROUND_FAR = (0.30, 0.40, 0.30)
 COL_ROAD = (0.15, 0.15, 0.17)
 COL_ROAD_EDGE = (0.20, 0.20, 0.23)
 COL_LANE = (0.92, 0.90, 0.70)
+# Broken / weathered asphalt
+COL_ROAD_PATCH = (0.20, 0.20, 0.23)   # resurfaced repair square
+COL_ROAD_CRACK = (0.085, 0.085, 0.095)
+COL_ROAD_HOLE = (0.04, 0.04, 0.045)   # pothole core
+COL_ROAD_GRIT = (0.26, 0.25, 0.24)    # loose gravel around damage
 COL_BORDER_A = (0.86, 0.20, 0.20)   # kerb stripe A
 COL_BORDER_B = (0.94, 0.94, 0.94)   # kerb stripe B
 
@@ -161,3 +178,82 @@ COL_HUD_BAD = (1.0, 0.32, 0.32)
 
 # Player start (matches legacy, scaled onto the enlarged track)
 PLAYER_START = [50.0 * TRACK_SCALE, -600.0 * TRACK_SCALE, CAR_GROUND_Z]
+
+
+# ---------------------------------------------------------------------------
+# Per-circuit visual themes
+#
+# Each track paints its own world -- sky, haze, ground, asphalt, kerbs and
+# hills -- so you can tell at a glance which circuit you're on from the very
+# first frame instead of every track looking like the same place.
+# ---------------------------------------------------------------------------
+THEMES = {
+    1: dict(  # Dusk Circuit -- the original cool blue evening
+        name="Dusk Circuit",
+        sky_top=(0.16, 0.28, 0.52), sky_horizon=(0.86, 0.72, 0.62),
+        fog=(0.74, 0.70, 0.72), ground=(0.24, 0.42, 0.24),
+        road=(0.15, 0.15, 0.17), road_edge=(0.20, 0.20, 0.23),
+        lane=(0.92, 0.90, 0.70),
+        kerb_a=(0.86, 0.20, 0.20), kerb_b=(0.94, 0.94, 0.94),
+        hill_low=(0.13, 0.30, 0.15), hill_high=(0.48, 0.54, 0.31),
+        tree_dark=(0.10, 0.42, 0.14), tree_light=(0.14, 0.60, 0.18),
+        sun=(1.0, 0.82, 0.48),
+    ),
+    2: dict(  # Desert Run -- bleached sand, hot hazy sky
+        name="Desert Run",
+        sky_top=(0.32, 0.52, 0.78), sky_horizon=(0.96, 0.86, 0.66),
+        fog=(0.92, 0.84, 0.68), ground=(0.76, 0.66, 0.40),
+        road=(0.26, 0.24, 0.22), road_edge=(0.32, 0.30, 0.27),
+        lane=(0.96, 0.94, 0.80),
+        kerb_a=(0.20, 0.42, 0.80), kerb_b=(0.96, 0.96, 0.92),
+        hill_low=(0.62, 0.48, 0.28), hill_high=(0.86, 0.76, 0.52),
+        tree_dark=(0.34, 0.44, 0.20), tree_light=(0.50, 0.58, 0.26),
+        sun=(1.0, 0.90, 0.60),
+    ),
+    3: dict(  # Midnight City -- dark, neon-lit speedway
+        name="Midnight City",
+        sky_top=(0.03, 0.04, 0.11), sky_horizon=(0.10, 0.13, 0.28),
+        fog=(0.10, 0.12, 0.22), ground=(0.10, 0.14, 0.16),
+        road=(0.09, 0.09, 0.11), road_edge=(0.13, 0.13, 0.16),
+        lane=(0.85, 0.92, 0.98),
+        kerb_a=(0.10, 0.78, 0.85), kerb_b=(0.92, 0.95, 1.0),
+        hill_low=(0.07, 0.10, 0.14), hill_high=(0.16, 0.20, 0.28),
+        tree_dark=(0.06, 0.18, 0.12), tree_light=(0.09, 0.26, 0.16),
+        sun=(0.55, 0.70, 1.0),
+    ),
+    4: dict(  # Alpine Forest -- deep pine green under a crisp sky
+        name="Alpine Forest",
+        sky_top=(0.20, 0.42, 0.68), sky_horizon=(0.78, 0.86, 0.90),
+        fog=(0.72, 0.80, 0.84), ground=(0.16, 0.34, 0.20),
+        road=(0.19, 0.19, 0.20), road_edge=(0.24, 0.24, 0.26),
+        lane=(0.95, 0.93, 0.75),
+        kerb_a=(0.95, 0.80, 0.10), kerb_b=(0.12, 0.12, 0.14),
+        hill_low=(0.10, 0.26, 0.16), hill_high=(0.62, 0.68, 0.66),
+        tree_dark=(0.06, 0.30, 0.14), tree_light=(0.10, 0.44, 0.18),
+        sun=(1.0, 0.95, 0.85),
+    ),
+    5: dict(  # Canyon Sunset -- red rock and a burning sky
+        name="Canyon Sunset",
+        sky_top=(0.34, 0.20, 0.42), sky_horizon=(0.98, 0.60, 0.32),
+        fog=(0.88, 0.62, 0.46), ground=(0.62, 0.36, 0.24),
+        road=(0.21, 0.17, 0.16), road_edge=(0.27, 0.22, 0.20),
+        lane=(0.98, 0.90, 0.70),
+        kerb_a=(0.80, 0.16, 0.18), kerb_b=(0.98, 0.92, 0.84),
+        hill_low=(0.44, 0.22, 0.16), hill_high=(0.80, 0.50, 0.32),
+        tree_dark=(0.28, 0.34, 0.16), tree_light=(0.40, 0.46, 0.20),
+        sun=(1.0, 0.66, 0.30),
+    ),
+}
+
+_active_theme = dict(THEMES[1])
+
+
+def set_theme(layout_id):
+    """Make ``layout_id``'s palette current (call before building a track)."""
+    global _active_theme
+    _active_theme = THEMES.get(layout_id, THEMES[1])
+
+
+def T(key):
+    """Look up a colour in the active circuit theme."""
+    return _active_theme[key]

@@ -128,6 +128,7 @@ class Player:
         self.boost_active = False
         self.boost_start = 0.0
         self.boost_cd_until = 0.0     # earliest time the next boost may fire
+        self.pothole_until = 0.0      # bogged down after clipping a pothole
         self.shield_active = False
         self.shield_start = 0.0
         self.jump_active = False
