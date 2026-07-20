@@ -47,6 +47,7 @@ class Game:
         self.hills = []
         self.lakes = []
         self.rocks = []
+        self.lamps = []
         self.explosions = []
         self.message = ""
         self.message_until = 0.0
@@ -86,6 +87,7 @@ class Game:
         gfx.reset_ground_cache()
         self.track.dispose()
         self.track.build(difficulty)
+        gfx.build_sky(random.Random(random.randrange(1 << 30)))
         sx, sy = self.track.start_pos
         self.player.reset(pos=(sx, sy,
                                self.track.height_at(sx, sy) + C.CAR_GROUND_Z),
@@ -185,7 +187,9 @@ class Game:
                 store.append((x, y) if extra is None else extra(x, y))
 
         _place(self.trees, C.NUM_TREES, 6500, 6500, 90000,
-               lambda x, y: (x, y, random.uniform(0.75, 1.4)))
+               lambda x, y: (x, y, random.uniform(0.75, 1.4),
+                             random.choice((0, 0, 1, 1, 2))))
+        self._spawn_lamps()
         _place(self.rocks, C.NUM_ROCKS, 6800, 6800, 45000,
                lambda x, y: (x, y, random.uniform(0.6, 1.5), random.uniform(0, 360)))
         # lakes sit well off the racing surface
@@ -198,6 +202,31 @@ class Game:
             x, y = math.cos(ang) * dist, math.sin(ang) * dist
             self.hills.append((x, y, random.uniform(700, 1500),
                                random.uniform(260, 520)))
+
+    def _spawn_lamps(self):
+        """Line the verges with street lamps, alternating sides."""
+        self.lamps = []
+        line = self.lap_waypoints if hasattr(self, 'lap_waypoints') else             [(w[0], w[1]) for w in self.track.auto_waypoints]
+        acc = 0.0
+        side = 1
+        for i in range(len(line) - 1):
+            ax, ay = line[i]
+            bx, by = line[i + 1]
+            seg = math.hypot(bx - ax, by - ay)
+            if seg < 1:
+                continue
+            ux, uy = (bx - ax) / seg, (by - ay) / seg
+            px, py = -uy, ux
+            t = -acc
+            while t < seg:
+                if t >= 0:
+                    off = (C.ROAD_WIDTH / 2 + 55) * side
+                    lx, ly = ax + ux * t + px * off, ay + uy * t + py * off
+                    face = math.degrees(math.atan2(-py * side, -px * side))
+                    self.lamps.append((lx, ly, face))
+                    side = -side
+                t += C.LAMP_SPACING
+            acc = (acc + seg) % C.LAMP_SPACING
 
     def flash(self, msg, seconds=2.5):
         self.message = msg
@@ -330,7 +359,16 @@ class Game:
             target_speed += (tiers[gear - 1] - target_speed) * g
         elif g < 0:                                # descending -> up a gear
             target_speed += (tiers[gear + 1] - target_speed) * (-g)
-        p.speed += (target_speed - p.speed) * min(1.0, C.SPEED_LERP * fs)
+
+        # Integrate as ACCELERATION, not a snap to the target: the engine pulls
+        # toward the target speed while gravity pushes along the slope. That is
+        # what gives hills weight -- you visibly gather pace down a descent,
+        # grind down as a climb steepens, and momentum carries you over a crest
+        # instead of the speed teleporting to whatever the gradient dictates.
+        accel = (target_speed - p.speed) * C.SPEED_LERP
+        accel -= self.grade * C.GRAVITY_ACCEL
+        p.speed = max(C.SPEED_FLOOR,
+                      min(C.SPEED_CEILING, p.speed + accel * fs))
 
         # engine note tracks throttle; boost adds a whoosh
         audio.set_engine(p.speed / C.BOOST_SPEED)
@@ -720,6 +758,8 @@ class Game:
     def draw_world(self):
         gfx.place_lights()
         gfx.draw_ground(height=self.track.ground_height_at)
+        p = self.player
+        gfx.draw_sky_bodies((p.pos[0], p.pos[1], p.pos[2]))
         # distant scenery first (hills sit on the horizon, lakes on the ground)
         H = self.track.ground_height_at      # landscape
         RH = self.track.height_at            # road surface
@@ -729,7 +769,7 @@ class Game:
             props.draw_lake(lx, ly, rx, ry, base_z=H(lx, ly))
         if self.track.bridge:
             bx, by, ba, blen = self.track.bridge
-            deck = self.track.height_at(bx, by)
+            deck = self.track.deck_z
             water = deck - self.track.bowl[3] * 0.72
             props.draw_lake(bx, by, self.track.bowl[2] * 0.92,
                             self.track.bowl[2] * 0.92, base_z=water)
@@ -737,8 +777,11 @@ class Game:
         self.track.draw()
         for (rx, ry, rs, ra) in self.rocks:
             props.draw_rock(rx, ry, rs, ra, base_z=H(rx, ry))
-        for (tx, ty, ts) in self.trees:
-            props.draw_tree(tx, ty, ts, base_z=H(tx, ty))
+        for (tx, ty, ts, tk) in self.trees:
+            props.draw_tree(tx, ty, ts, base_z=H(tx, ty), kind=tk)
+        night = gfx._active_night()
+        for (lx, ly, la) in getattr(self, 'lamps', []):
+            props.draw_street_lamp(lx, ly, la, base_z=H(lx, ly), night=night)
         for (sx, sy, w, d, ang) in self.track.speed_breakers:
             props.draw_speed_breaker(sx, sy, w, d, ang, base_z=RH(sx, sy))
         # pickups and hazards live ON THE ROAD -> road height, so they float

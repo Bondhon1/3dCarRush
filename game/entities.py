@@ -31,6 +31,56 @@ def _wheel(wx, wy, wz, radius, width):
     glPopMatrix()
 
 
+def _section(w, h, cz, n=4.0, seg=16):
+    """One rounded cross-section of the car body (a superellipse).
+
+    ``n`` controls how boxy it is: 2 = ellipse, 4 = softly rounded rectangle.
+    Returns points in the Y-Z plane plus their outward normals."""
+    pts = []
+    for i in range(seg):
+        t = 2.0 * math.pi * i / seg
+        ct, st = math.cos(t), math.sin(t)
+        p = 2.0 / n
+        yy = w * math.copysign(abs(ct) ** p, ct)
+        zz = h * math.copysign(abs(st) ** p, st)
+        # outward normal of a superellipse
+        ny = (abs(ct) ** (2 - p) / w) * math.copysign(1.0, ct) if ct else 0.0
+        nz = (abs(st) ** (2 - p) / h) * math.copysign(1.0, st) if st else 0.0
+        nl = math.hypot(ny, nz) or 1.0
+        pts.append((yy, cz + zz, ny / nl, nz / nl))
+    return pts
+
+
+def _loft(stations, seg=16):
+    """Skin a list of (x, halfwidth, halfheight, centre_z) stations.
+
+    This is what gives the cars a genuinely curved shell -- a swept, rounded
+    hull -- instead of the stack of boxes they used to be."""
+    secs = [(x, _section(w, h, cz, seg=seg)) for (x, w, h, cz) in stations]
+    for i in range(len(secs) - 1):
+        x0, s0 = secs[i]
+        x1, s1 = secs[i + 1]
+        glBegin(GL_QUAD_STRIP)
+        for k in range(seg + 1):
+            j = k % seg
+            for (xx, sec) in ((x0, s0), (x1, s1)):
+                yy, zz, ny, nz = sec[j]
+                glNormal3f(0.0, ny, nz)
+                glVertex3f(xx, yy, zz)
+        glEnd()
+    # cap the nose and tail so the hull reads as solid
+    for (xx, sec), nx in ((secs[0], -1.0), (secs[-1], 1.0)):
+        glBegin(GL_TRIANGLE_FAN)
+        glNormal3f(nx, 0.0, 0.0)
+        cz = sum(p[1] for p in sec) / len(sec)
+        glVertex3f(xx, 0.0, cz)
+        rng = range(seg, -1, -1) if nx < 0 else range(seg + 1)
+        for k in rng:
+            yy, zz, _, _ = sec[k % seg]
+            glVertex3f(xx, yy, zz)
+        glEnd()
+
+
 def draw_car(x, y, z, angle, body, accent, gun_angle=None, bank=0.0, pitch=0.0):
     """Draw a lit, detailed car.
 
@@ -47,36 +97,58 @@ def draw_car(x, y, z, angle, body, accent, gun_angle=None, bank=0.0, pitch=0.0):
     if pitch:
         glRotatef(pitch, 0, 1, 0)         # nose dips/rises about the lateral axis
 
-    # lower skirt (darker, slightly wider) grounds the car visually
-    glColor3f(*(c * 0.6 for c in body))
-    glPushMatrix(); glTranslatef(0, 0, -0.06 * S)
-    gfx.box(2.42 * S, 1.16 * S, 0.16 * S); glPopMatrix()
-
-    # main hull
+    # --- curved hull -------------------------------------------------------
+    # A swept, rounded shell: wide and low through the middle, tapering to a
+    # pointed nose and a cut-off tail.
     glColor3f(*body)
-    glPushMatrix(); glTranslatef(0, 0, 0.16 * S)
-    gfx.box(2.3 * S, 1.08 * S, 0.34 * S); glPopMatrix()
+    _loft([
+        (-2.45 * S, 0.72 * S, 0.22 * S, 0.30 * S),   # tail
+        (-1.95 * S, 0.98 * S, 0.32 * S, 0.30 * S),
+        (-0.90 * S, 1.10 * S, 0.38 * S, 0.30 * S),
+        ( 0.30 * S, 1.12 * S, 0.38 * S, 0.29 * S),   # widest point
+        ( 1.45 * S, 1.02 * S, 0.33 * S, 0.28 * S),
+        ( 2.20 * S, 0.76 * S, 0.24 * S, 0.27 * S),
+        ( 2.55 * S, 0.42 * S, 0.14 * S, 0.26 * S),   # nose
+    ])
 
-    # sloped nose + tail wedges for a less boxy silhouette
-    glColor3f(*body)
-    glPushMatrix(); glTranslatef(2.05 * S, 0, 0.28 * S)
-    gfx.box(0.45 * S, 0.95 * S, 0.18 * S); glPopMatrix()
-    glPushMatrix(); glTranslatef(-2.05 * S, 0, 0.30 * S)
-    gfx.box(0.45 * S, 1.0 * S, 0.2 * S); glPopMatrix()
+    # darker rocker panel hugging the underside
+    glColor3f(*(c * 0.55 for c in body))
+    _loft([
+        (-2.30 * S, 0.74 * S, 0.10 * S, 0.10 * S),
+        ( 0.30 * S, 1.14 * S, 0.12 * S, 0.09 * S),
+        ( 2.30 * S, 0.78 * S, 0.10 * S, 0.10 * S),
+    ])
 
-    # accent racing stripe along the spine
-    glColor3f(*accent)
-    glPushMatrix(); glTranslatef(0, 0, 0.52 * S)
-    gfx.box(2.1 * S, 0.18 * S, 0.03 * S); glPopMatrix()
-
-    # cabin / greenhouse (glass)
+    # domed glasshouse (a squashed ellipsoid = curved windscreen + roofline)
     glColor3f(*C.COL_GLASS)
-    glPushMatrix(); glTranslatef(-0.1 * S, 0, 0.66 * S)
-    gfx.box(1.05 * S, 0.82 * S, 0.36 * S); glPopMatrix()
-    # roof cap in accent
-    glColor3f(*(min(1.0, c + 0.1) for c in accent))
-    glPushMatrix(); glTranslatef(-0.1 * S, 0, 0.98 * S)
-    gfx.box(0.9 * S, 0.72 * S, 0.05 * S); glPopMatrix()
+    glPushMatrix()
+    glTranslatef(-0.15 * S, 0, 0.62 * S)
+    glScalef(1.25 * S, 0.80 * S, 0.42 * S)
+    gfx.sphere(1.0, 20, 14)
+    glPopMatrix()
+    # accent roof strip following the dome
+    glColor3f(*(min(1.0, c + 0.12) for c in accent))
+    glPushMatrix()
+    glTranslatef(-0.15 * S, 0, 0.92 * S)
+    glScalef(0.95 * S, 0.34 * S, 0.10 * S)
+    gfx.sphere(1.0, 14, 10)
+    glPopMatrix()
+
+    # accent stripe down the spine
+    glColor3f(*accent)
+    glPushMatrix(); glTranslatef(0.9 * S, 0, 0.60 * S)
+    glScalef(1.5 * S, 0.11 * S, 0.06 * S)
+    gfx.sphere(1.0, 12, 8); glPopMatrix()
+
+    # rounded wheel arches
+    glColor3f(*(c * 0.7 for c in body))
+    for ax in (1.45 * S, -1.45 * S):
+        for ay in (1.02 * S, -1.02 * S):
+            glPushMatrix()
+            glTranslatef(ax, ay, 0.30 * S)
+            glScalef(0.62 * S, 0.16 * S, 0.42 * S)
+            gfx.sphere(1.0, 12, 8)
+            glPopMatrix()
 
     # wheels
     r, w = 0.44 * S, 0.26 * S

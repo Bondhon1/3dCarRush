@@ -53,6 +53,7 @@ class Track:
         self.e_k1 = self.e_k2 = self.e_k3 = 0.001
         self.e_p1 = self.e_p2 = self.e_p3 = 0.0
         self.bridge = None            # (x, y, angle, length) scaled, or None
+        self.deck_z = 0.0             # level of the (flat) bridge deck
         self.bowl = None              # (x, y, radius, depth) lake basin under it
 
     # -- public API --------------------------------------------------------
@@ -76,6 +77,8 @@ class Track:
         if self.bridge_raw:
             bx, by, ba, blen = self.bridge_raw
             self.bridge = (bx * S, by * S, ba, blen * S)
+            # deck sits level with the terrain at the span's midpoint
+            self.deck_z = self._base_height(bx * S, by * S)
             ox, oy, orr, od = self.bowl_raw
             self.bowl = (ox * S, oy * S, orr * S, od)
         self._generate_damage(C.DIFFICULTIES[difficulty]['damage_scale'])
@@ -99,13 +102,35 @@ class Track:
     # landscape (road, ground and scenery all read from it), so circuits climb
     # and drop.  It is a closed-form function, so height_at() is cheap enough
     # to call per-vertex while baking and per-frame for the cars.
-    def height_at(self, x, y):
+    def _base_height(self, x, y):
         a = self.elev_amp
         if a <= 0.0:
             return 0.0
         return a * (math.sin(x * self.e_k1 + self.e_p1) *
                     math.cos(y * self.e_k2 + self.e_p2)
                     + 0.55 * math.sin((x + y) * self.e_k3 + self.e_p3))
+
+    def height_at(self, x, y):
+        """Height of the ROAD surface.
+
+        Flat across the bridge span: a real bridge deck is level, and letting
+        the road undulate under a deck drawn at one fixed height is what made
+        the bridge structure sit above the tarmac and swallow the car."""
+        h = self._base_height(x, y)
+        if self.bridge is None:
+            return h
+        bx, by, ba, blen = self.bridge
+        a = math.radians(ba)
+        ca, sa = math.cos(a), math.sin(a)
+        along = (x - bx) * ca + (y - by) * sa
+        half = blen * 0.5
+        ramp = half * 0.45                     # ease back onto the terrain
+        d = abs(along)
+        if d > half + ramp:
+            return h
+        t = 1.0 if d <= half else 1.0 - (d - half) / ramp
+        t = t * t * (3 - 2 * t)                # smoothstep
+        return h + (self.deck_z - h) * t
 
     def ground_height_at(self, x, y):
         """Terrain height for the LANDSCAPE (grass + scenery).
@@ -114,7 +139,7 @@ class Track:
         ground scoops away into a lake basin.  Keeping the two separate is what
         lets the road stay level and span the water as a real bridge instead of
         diving into it."""
-        h = self.height_at(x, y)
+        h = self._base_height(x, y)
         if self.bowl:
             bx, by, br, bd = self.bowl
             d2 = (x - bx) ** 2 + (y - by) ** 2
@@ -386,7 +411,7 @@ class Track:
     # driven by a seeded RNG so a given circuit always wears the same way.
     # Drawn just above the lane paint (z=0.7) so holes and cracks visibly cut
     # through the markings, the way real broken road does.
-    _DMG_Z = 0.70
+    _DMG_Z = 2.2
 
     # --- generation (at build time, so gameplay can collide with potholes) ---
     def _gen_cluster(self, cx, cy, rng, big=True):
@@ -607,7 +632,7 @@ class Track:
                              (x0 + px * halfw, y0 + py * halfw),
                              (x1 + px * halfw, y1 + py * halfw),
                              (x1 - px * halfw, y1 - py * halfw)):
-                glVertex3f(vx, vy, 0.6 + self.height_at(vx, vy))
+                glVertex3f(vx, vy, 1.5 + self.height_at(vx, vy))
             s = e + LANE_GAP
         glEnd()
 
@@ -698,7 +723,7 @@ class Track:
                          (cx + (r + halfw) * c0, cy + (r + halfw) * s0),
                          (cx + (r + halfw) * c1, cy + (r + halfw) * s1),
                          (cx + (r - halfw) * c1, cy + (r - halfw) * s1)):
-            glVertex3f(vx, vy, 0.6 + self.height_at(vx, vy))
+            glVertex3f(vx, vy, 1.5 + self.height_at(vx, vy))
 
     def _emit_arc_kerb(self, cx, cy, r, a0, a1):
         h = C.BORDER_HEIGHT

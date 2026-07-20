@@ -514,3 +514,88 @@ def big_text(cx, y, s, scale, color=(1, 1, 1), width=2.4):
 def _stroke_width(ch):
     from OpenGL.GLUT import glutStrokeWidth
     return glutStrokeWidth(GLUT_STROKE_ROMAN, ord(ch))
+
+
+# ---------------------------------------------------------------------------
+# Sky bodies: real 3-D clouds and a night starfield
+# ---------------------------------------------------------------------------
+_clouds = []
+_stars = []
+
+
+def build_sky(rng):
+    """Scatter cloud volumes and stars for a new race."""
+    global _clouds, _stars
+    _clouds = []
+    for _ in range(C.NUM_CLOUDS):
+        cx = rng.uniform(-C.CLOUD_SPREAD, C.CLOUD_SPREAD)
+        cy = rng.uniform(-C.CLOUD_SPREAD, C.CLOUD_SPREAD)
+        cz = rng.uniform(*C.CLOUD_Z)
+        scale = rng.uniform(150.0, 340.0)
+        puffs = [(rng.uniform(-1.5, 1.5), rng.uniform(-0.8, 0.8),
+                  rng.uniform(-0.18, 0.18), rng.uniform(0.55, 1.0))
+                 for _ in range(rng.randint(4, 7))]
+        _clouds.append((cx, cy, cz, scale, puffs))
+    _stars = []
+    for _ in range(C.NUM_STARS):
+        # direction on the upper hemisphere
+        a = rng.uniform(0, 2 * math.pi)
+        el = rng.uniform(0.06, 1.15)
+        _stars.append((a, el, rng.uniform(0.6, 1.0)))
+
+
+def draw_sky_bodies(cam):
+    """Clouds (and stars at night) drawn in WORLD space around the camera.
+
+    Being real geometry rather than a painted backdrop, they parallax as you
+    drive and rise into view as you approach -- which is what the flat 2-D
+    puffs could never do."""
+    glDisable(GL_FOG)
+    glDepthMask(GL_FALSE)
+
+    if _active_night():
+        glDisable(GL_LIGHTING)
+        glPointSize(2.0)
+        glBegin(GL_POINTS)
+        for (a, el, b) in _stars:
+            r = 7000.0
+            ca, sa = math.cos(a), math.sin(a)
+            ce, se = math.cos(el), math.sin(el)
+            tw = 0.75 + 0.25 * math.sin(_time.time() * 1.7 + a * 9.0)
+            glColor4f(b * tw, b * tw, min(1.0, b * tw + 0.1), 1.0)
+            glVertex3f(cam[0] + r * ca * ce, cam[1] + r * sa * ce,
+                       cam[2] + r * se)
+        glEnd()
+        glEnable(GL_LIGHTING)
+
+    # clouds: soft lit puffs, slowly drifting downwind
+    drift = _time.time() * C.CLOUD_DRIFT
+    base = C.T('sky_horizon')
+    lit = tuple(min(1.0, c * 0.35 + 0.72) for c in base)
+    shade = tuple(min(1.0, c * 0.45 + 0.40) for c in base)
+    for (cx, cy, cz, scale, puffs) in _clouds:
+        wx = cx + drift
+        # wrap the field around the camera so clouds never run out
+        span = 2 * C.CLOUD_SPREAD
+        wx = cam[0] + ((wx - cam[0] + C.CLOUD_SPREAD) % span) - C.CLOUD_SPREAD
+        wy = cam[1] + ((cy - cam[1] + C.CLOUD_SPREAD) % span) - C.CLOUD_SPREAD
+        glPushMatrix()
+        glTranslatef(wx, wy, cz)
+        for (px, py, pz, ps) in puffs:
+            glPushMatrix()
+            glTranslatef(px * scale, py * scale, pz * scale)
+            glScalef(ps * scale, ps * scale * 0.8, ps * scale * 0.42)
+            glColor4f(*lit, 0.92)
+            sphere(1.0, 12, 9)
+            glColor4f(*shade, 0.5)          # slightly darker base
+            glPushMatrix(); glTranslatef(0, 0, -0.35); glScalef(0.9, 0.9, 0.5)
+            sphere(1.0, 10, 7); glPopMatrix()
+            glPopMatrix()
+        glPopMatrix()
+
+    glDepthMask(GL_TRUE)
+    glEnable(GL_FOG)
+
+
+def _active_night():
+    return bool(C._active_theme.get('night'))

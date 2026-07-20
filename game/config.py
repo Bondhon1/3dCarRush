@@ -73,6 +73,10 @@ ELEV_WAVELEN = (2600.0, 4600.0)   # world units per hill (long = gentle sweeps)
 # crawl. A descent shifts you up a gear the same way. Bounding it to the speed
 # tiers is what stops steep sections turning into a dead stop.
 GRADE_STEEP = 0.28             # slope at which the full one-gear shift applies
+# Gravity along the slope. This is what makes hills FEEL physical: rather than
+# snapping to a new target speed you visibly build pace on a descent and bleed
+# it climbing, and momentum carries you over a crest.
+GRAVITY_ACCEL = 0.26           # speed change per 60fps frame at slope 1.0
 GRADE_PITCH_K = 0.9            # how much of the slope shows as body pitch
 ENEMY_GRADE_UP = 0.70          # rival speed kept on a full climb
 ENEMY_GRADE_DOWN = 1.15        # rival speed on a full descent
@@ -83,6 +87,19 @@ ROAD_TESS = 110.0              # road surface subdivision along a straight;
                               # must be fine enough to hug the rolling terrain
 GROUND_TILE = 130.0
 GROUND_DROP = 10.0              # grass sits this far below the road surface
+
+# Sky: real 3-D cloud volumes drifting overhead (the old flat 2-D puffs read
+# as static fog because they never parallaxed or rose into view).
+NUM_CLOUDS = 26
+CLOUD_Z = (1100.0, 2100.0)     # altitude band
+CLOUD_SPREAD = 11000.0         # how far they scatter horizontally
+CLOUD_DRIFT = 9.0              # world units/sec of wind
+NUM_STARS = 220                # night skies only
+
+# Street lighting -- poles down the verges that glow after dark
+LAMP_SPACING = 900.0           # distance between poles along the road
+LAMP_HEIGHT = 150.0
+NUM_TREES_EXTRA = 90           # trees added on top of NUM_TREES
 
 # Bridge / lake basin
 BRIDGE_DEPTH = 150.0           # how far the ground scoops below the road deck
@@ -141,6 +158,8 @@ BOOST_COOLDOWN = 2.5           # seconds you must wait after a boost before the
 # How quickly the car eases toward its target speed (per 60fps frame, 0..1).
 # Gives a smooth accelerate/decelerate ramp instead of an instant snap.
 SPEED_LERP = 0.10
+SPEED_FLOOR = 1.2              # gravity can bog you down but never stall you
+SPEED_CEILING = BOOST_SPEED * 1.35   # terminal velocity down a steep descent
 
 # Enemy pace (difficulty). Rivals push a touch harder than the player's cruise
 # so you must use boost, kits and gunfire to stay ahead.
@@ -170,7 +189,7 @@ CATCHUP_FULL = 3200.0          # lead at which the surge reaches full strength
 # Camera
 # ---------------------------------------------------------------------------
 FOV_Y = 62
-NEAR_PLANE = 1.0
+NEAR_PLANE = 6.0
 FAR_PLANE = 9000.0
 CAM_BACK = 190.0               # 3rd-person distance behind the car
 CAM_HEIGHT = 95.0
@@ -208,7 +227,7 @@ ENEMY_GUN_TURN = 6.0           # deg/frame the enemy turret tracks the player
 NUM_HEALTH_KITS = 4
 NUM_SHIELD_KITS = 3
 NUM_BOMBS = 6
-NUM_TREES = 80
+NUM_TREES = 150
 NUM_HILLS = 14
 NUM_LAKES = 3
 NUM_ROCKS = 40
@@ -313,7 +332,7 @@ THEMES = {
         kerb_a=(0.10, 0.78, 0.85), kerb_b=(0.92, 0.95, 1.0),
         hill_low=(0.07, 0.10, 0.14), hill_high=(0.16, 0.20, 0.28),
         tree_dark=(0.06, 0.18, 0.12), tree_light=(0.09, 0.26, 0.16),
-        sun=(0.55, 0.70, 1.0),
+        sun=(0.55, 0.70, 1.0), night=True,
     ),
     4: dict(  # Alpine Forest -- deep pine green under a crisp sky
         name="Alpine Forest",

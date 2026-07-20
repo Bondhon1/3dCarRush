@@ -266,19 +266,39 @@ def draw_boost_flames(pos, angle):
 # ---------------------------------------------------------------------------
 # Tree -- lit trunk + stacked cones
 # ---------------------------------------------------------------------------
-def draw_tree(x, y, scale=1.0, base_z=0.0):
+def draw_tree(x, y, scale=1.0, base_z=0.0, kind=0):
+    """Three silhouettes -- conifer, broadleaf and scrub -- so woodland reads as
+    a varied treeline instead of rows of identical cones."""
+    dark, light = C.T('tree_dark'), C.T('tree_light')
+    mid = tuple((dark[i] + light[i]) / 2 for i in range(3))
     glPushMatrix()
     glTranslatef(x, y, base_z)
     glScalef(scale, scale, scale)
-    glColor3f(0.45, 0.28, 0.12)
-    gfx.capped_cylinder(9, 58, 10)
-    dark, light = C.T('tree_dark'), C.T('tree_light')
-    mid = tuple((dark[i] + light[i]) / 2 for i in range(3))
-    tiers = [(58, 42, 60, dark), (92, 36, 56, mid), (124, 28, 50, light)]
-    for z, r, h, col in tiers:
-        glColor3f(*col)
-        glPushMatrix(); glTranslatef(0, 0, z)
-        gfx.cone(r, h, 12); glPopMatrix()
+    glRotatef((x * 7.3 + y * 3.1) % 360, 0, 0, 1)
+
+    if kind == 1:                       # broadleaf: bare trunk + round canopy
+        glColor3f(0.40, 0.26, 0.13)
+        gfx.capped_cylinder(8, 76, 9)
+        for (bz, br, col) in ((88, 44, dark), (112, 38, mid), (132, 26, light)):
+            glColor3f(*col)
+            glPushMatrix(); glTranslatef(0, 0, bz)
+            glScalef(1.0, 1.0, 0.78); gfx.sphere(br, 12, 9); glPopMatrix()
+    elif kind == 2:                     # scrub: low clustered bush
+        glColor3f(0.38, 0.26, 0.14)
+        gfx.capped_cylinder(6, 22, 8)
+        for (bx, by_, bz, br) in ((0, 0, 34, 30), (16, 8, 26, 22),
+                                  (-14, -10, 24, 20)):
+            glColor3f(*(dark if br > 24 else mid))
+            glPushMatrix(); glTranslatef(bx, by_, bz)
+            glScalef(1.0, 1.0, 0.7); gfx.sphere(br, 10, 8); glPopMatrix()
+    else:                               # conifer: stacked tapering tiers
+        glColor3f(0.45, 0.28, 0.12)
+        gfx.capped_cylinder(9, 58, 10)
+        for (z, r, h, col) in ((52, 46, 62, dark), (88, 38, 58, mid),
+                               (120, 30, 54, mid), (150, 20, 46, light)):
+            glColor3f(*col)
+            glPushMatrix(); glTranslatef(0, 0, z)
+            gfx.cone(r, h, 12); glPopMatrix()
     glPopMatrix()
 
 
@@ -499,4 +519,72 @@ def draw_bridge(x, y, angle, length, deck_z, water_z, width=C.ROAD_WIDTH):
     glTranslatef(0, 0, deck_z - 9)
     gfx.box(hl, hw, 7)
     glPopMatrix()
+    glPopMatrix()
+
+
+# ---------------------------------------------------------------------------
+# Street lamp -- a curved pole with a head that glows after dark
+# ---------------------------------------------------------------------------
+def draw_street_lamp(x, y, angle, base_z=0.0, night=False):
+    """Roadside lamp. At night the head is emissive and throws a soft pool of
+    light onto the tarmac, so circuits read clearly in the dark themes."""
+    H = C.LAMP_HEIGHT
+    glPushMatrix()
+    glTranslatef(x, y, base_z)
+    glRotatef(angle, 0, 0, 1)          # +X points across, toward the road
+    # pole
+    glColor3f(0.34, 0.35, 0.38)
+    gfx.capped_cylinder(5.0, H, slices=10)
+    # curved arm reaching over the verge
+    seg = 7
+    for i in range(seg):
+        t0, t1 = i / seg, (i + 1) / seg
+        for (t, r) in ((t0, 4.2), (t1, 4.2)):
+            pass
+        a0 = t0 * math.pi / 2
+        a1 = t1 * math.pi / 2
+        R = 52.0
+        x0, z0 = R * math.sin(a0), H + R * (1 - math.cos(a0)) * 0.55
+        x1, z1 = R * math.sin(a1), H + R * (1 - math.cos(a1)) * 0.55
+        glPushMatrix()
+        glTranslatef(x0, 0, z0)
+        dx, dz = x1 - x0, z1 - z0
+        L = math.hypot(dx, dz) or 1.0
+        glRotatef(math.degrees(math.atan2(dx, dz)), 0, 1, 0)
+        gfx.capped_cylinder(4.0, L, slices=8)
+        glPopMatrix()
+    # lamp head
+    hx, hz = 52.0, H + 52.0 * 0.55
+    glPushMatrix()
+    glTranslatef(hx, 0, hz - 6)
+    glColor3f(0.30, 0.31, 0.34)
+    glPushMatrix(); glScalef(1.6, 1.0, 0.5); gfx.sphere(11, 12, 8); glPopMatrix()
+    if night:
+        gfx.set_emissive((1.0, 0.92, 0.62))
+        glColor3f(1.0, 0.95, 0.7)
+        glPushMatrix(); glTranslatef(0, 0, -5)
+        glScalef(1.3, 0.9, 0.4); gfx.sphere(9, 10, 8); glPopMatrix()
+        gfx.clear_emissive()
+    glPopMatrix()
+
+    if night:
+        # glow halo + pool of light on the road (unlit, additive)
+        gfx.lighting(False)
+        glDepthMask(GL_FALSE)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+        glPushMatrix(); glTranslatef(hx, 0, hz - 8)
+        glColor4f(1.0, 0.9, 0.55, 0.30)
+        gfx.sphere(26, 10, 8)
+        glPopMatrix()
+        glBegin(GL_TRIANGLE_FAN)          # light pool
+        glColor4f(1.0, 0.88, 0.55, 0.16)
+        glVertex3f(hx, 0, 1.6)
+        glColor4f(1.0, 0.88, 0.55, 0.0)
+        for i in range(19):
+            t = 2 * math.pi * i / 18
+            glVertex3f(hx + 150 * math.cos(t), 150 * math.sin(t), 1.6)
+        glEnd()
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glDepthMask(GL_TRUE)
+        gfx.lighting(True)
     glPopMatrix()
