@@ -603,3 +603,35 @@ def draw_sky_bodies(cam):
 
 def _active_night():
     return bool(C._active_theme.get('night'))
+
+
+# ---------------------------------------------------------------------------
+# Screenshots
+# ---------------------------------------------------------------------------
+def save_screenshot(width, height):
+    """Grab the back buffer (call just before the swap) and write a PNG.
+
+    Saves next to the executable/project rather than into the frozen exe's
+    temporary unpack directory. Returns the path, or None on failure."""
+    try:
+        import datetime
+        import numpy as np
+        import pygame
+        if getattr(sys, "frozen", False):
+            root = os.path.dirname(sys.executable)
+        else:
+            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        folder = os.path.join(root, "screenshots")
+        os.makedirs(folder, exist_ok=True)
+        glFinish()
+        glReadBuffer(GL_BACK)
+        data = glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE)
+        arr = np.frombuffer(data, np.uint8).reshape(height, width, 3)[::-1]
+        surf = pygame.image.frombuffer(np.ascontiguousarray(arr).tobytes(),
+                                       (width, height), "RGB")
+        name = datetime.datetime.now().strftime("carrush_%Y%m%d_%H%M%S.png")
+        path = os.path.join(folder, name)
+        pygame.image.save(surf, path)
+        return path
+    except Exception:
+        return None

@@ -236,7 +236,7 @@ def draw_menu(g):
                       "1-5 or UP/DOWN select      ENTER or CLICK to race",
                       C.COL_HUD_WARN)
     gfx.text_centered(g.width / 2, 44,
-                      "Drive WASD    Aim ARROWS    Fire SPACE    View V",
+                      "WASD drive   ARROWS aim   SPACE fire   V view   P pause   F12 shot",
                       C.COL_HUD_DIM)
     gfx.end_2d()
 
@@ -262,6 +262,21 @@ def draw_countdown(g, value):
 # ---------------------------------------------------------------------------
 def draw_overlay(g):
     from .engine import WIN, LOSE, ENEMY_WIN, PAUSED
+    if g.state == PAUSED:
+        # Deliberately minimal: a small badge instead of dimming the whole
+        # screen, so a paused frame is still worth screenshotting.
+        gfx.begin_2d(g.width, g.height)
+        cx = g.width / 2
+        gfx.rounded_rect(cx - 132, g.height - 74, cx + 132, g.height - 26,
+                         10, (0.05, 0.07, 0.10, 0.62))
+        gfx.rect_outline(cx - 132, g.height - 74, cx + 132, g.height - 26,
+                         C.COL_HUD_EDGE, 1.4)
+        gfx.text_centered(cx, g.height - 58, "PAUSED", C.COL_HUD_EDGE)
+        gfx.text_centered(cx, g.height - 72,
+                          "P resume   H hide HUD   F12 screenshot",
+                          C.COL_HUD_DIM, gfx.GLUT_BITMAP_HELVETICA_12)
+        gfx.end_2d()
+        return
     gfx.begin_2d(g.width, g.height)
     glColor4f(0.02, 0.03, 0.05, 0.6)
     glBegin(GL_QUADS)

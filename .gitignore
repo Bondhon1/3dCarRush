@@ -40,3 +40,6 @@ desktop.ini
 *.log
 scratch/
 captures/
+
+# Runtime screenshot captures (F12)
+screenshots/

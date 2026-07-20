@@ -40,23 +40,23 @@ DIFFICULTIES = {
     1: dict(name="ROOKIE",  desc="Open, flowing circuit",
             corners=(6, 7),  size=3000, radius_var=(0.86, 1.14),
             enemy_speed=(6.2, 6.9), enemy_fire=2.6, damage_scale=2.6,
-            bombs=3, breakers=1, lives=12, catchup=0.10, enemy_lives=3, elev=0.35),
+            bombs=6, breakers=1, lives=12, catchup=0.10, enemy_lives=3, elev=0.35),
     2: dict(name="AMATEUR", desc="A few real corners",
             corners=(7, 8),  size=2900, radius_var=(0.82, 1.18),
             enemy_speed=(7.3, 8.1), enemy_fire=2.2, damage_scale=2.2,
-            bombs=4, breakers=1, lives=11, catchup=0.18, enemy_lives=4, elev=0.60),
+            bombs=8, breakers=1, lives=11, catchup=0.18, enemy_lives=4, elev=0.60),
     3: dict(name="PRO",     desc="Technical and quick",
             corners=(8, 10), size=2800, radius_var=(0.78, 1.22),
             enemy_speed=(8.3, 9.3), enemy_fire=1.8, damage_scale=1.9,
-            bombs=6, breakers=2, lives=10, catchup=0.26, enemy_lives=5, elev=0.85),
+            bombs=12, breakers=2, lives=10, catchup=0.26, enemy_lives=5, elev=0.85),
     4: dict(name="EXPERT",  desc="Tight, punishing line",
             corners=(9, 11), size=2750, radius_var=(0.74, 1.26),
             enemy_speed=(9.2, 10.2), enemy_fire=1.5, damage_scale=1.6,
-            bombs=7, breakers=2, lives=9, catchup=0.34, enemy_lives=6, elev=1.05),
+            bombs=14, breakers=2, lives=9, catchup=0.34, enemy_lives=6, elev=1.05),
     5: dict(name="INSANE",  desc="Relentless rivals",
             corners=(10, 13), size=2700, radius_var=(0.70, 1.30),
             enemy_speed=(10.1, 11.2), enemy_fire=1.2, damage_scale=1.4,
-            bombs=9, breakers=3, lives=8, catchup=0.45, enemy_lives=7, elev=1.30),
+            bombs=18, breakers=3, lives=8, catchup=0.45, enemy_lives=7, elev=1.30),
 }
 
 # ---------------------------------------------------------------------------
@@ -196,8 +196,7 @@ FAR_PLANE = 9000.0
 CAM_BACK = 190.0               # 3rd-person distance behind the car
 CAM_HEIGHT = 95.0
 CAM_LOOK_AHEAD = 40.0
-
-# ---------------------------------------------------------------------------
+CAM_MIN_CLEAR = 45.0           # never let the eye dip below the terrain
 # Combat / hazards
 # ---------------------------------------------------------------------------
 GUN_TURN_SPEED = 5.0
@@ -205,7 +204,7 @@ PLAYER_FIRE_COOLDOWN = 0.22    # rate-limits the gun so rapid taps can't spam
                               # dozens of overlapping shot sounds
 BULLET_SPEED = 34.0
 BULLET_HIT_RADIUS = 55.0
-ENEMY_MAX_LIVES = 4
+ENEMY_MAX_LIVES = 8
 PLAYER_MAX_LIVES = 10
 JUMP_HEIGHT_MAX = 22
 JUMP_DURATION = 0.8
@@ -216,7 +215,7 @@ BREAKER_FAST_DAMAGE = 1
 BREAKER_FAST_SPEED = NORMAL_SPEED + 0.5   # above this = a dangerous fast hit
 
 # Enemy guns -- rivals only open fire when the player strays too close.
-ENEMY_GUN_RANGE = 620.0        # will only shoot the player within this distance
+ENEMY_GUN_RANGE = 720.0        # will only shoot the player within this distance
 ENEMY_GUN_FOV = 0.35           # aim tolerance (dot of turret vs. line-to-player)
 ENEMY_BULLET_SPEED = 26.0
 ENEMY_FIRE_COOLDOWN = 1.7      # seconds between an enemy's shots (fewer rounds/sec)

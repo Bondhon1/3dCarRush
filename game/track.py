@@ -77,8 +77,15 @@ class Track:
         if self.bridge_raw:
             bx, by, ba, blen = self.bridge_raw
             self.bridge = (bx * S, by * S, ba, blen * S)
-            # deck sits level with the terrain at the span's midpoint
-            self.deck_z = self._base_height(bx * S, by * S)
+            # Deck sits at the span's HIGHEST point, not its midpoint: a level
+            # deck set to the midpoint height cuts down through any rise along
+            # the span, leaving the road in an un-modelled trench.
+            ar = math.radians(ba)
+            n = 24
+            self.deck_z = max(
+                self._base_height(bx * S + math.cos(ar) * (blen * S) * (i / n - 0.5),
+                                  by * S + math.sin(ar) * (blen * S) * (i / n - 0.5))
+                for i in range(n + 1))
             ox, oy, orr, od = self.bowl_raw
             self.bowl = (ox * S, oy * S, orr * S, od)
         self._generate_damage(C.DIFFICULTIES[difficulty]['damage_scale'])
@@ -123,12 +130,24 @@ class Track:
         a = math.radians(ba)
         ca, sa = math.cos(a), math.sin(a)
         along = (x - bx) * ca + (y - by) * sa
+        across = -(x - bx) * sa + (y - by) * ca
         half = blen * 0.5
         ramp = half * 0.45                     # ease back onto the terrain
         d = abs(along)
         if d > half + ramp:
             return h
+        # Constrain to the bridge CORRIDOR. Testing only the along-axis
+        # distance flattened an infinite strip right across the map, dropping
+        # far-away stretches of road tens of units below the surrounding
+        # ground -- which buried the chase camera in a hillside.
+        w = abs(across)
+        half_w = C.ROAD_WIDTH * 0.5 + 60.0
+        ramp_w = 220.0
+        if w > half_w + ramp_w:
+            return h
         t = 1.0 if d <= half else 1.0 - (d - half) / ramp
+        tw = 1.0 if w <= half_w else 1.0 - (w - half_w) / ramp_w
+        t = min(t, tw)
         t = t * t * (3 - 2 * t)                # smoothstep
         return h + (self.deck_z - h) * t
 

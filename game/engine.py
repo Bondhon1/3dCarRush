@@ -1,5 +1,6 @@
 """Game engine: state, camera, input, update loop and the GLUT bootstrap."""
 
+import os
 import sys
 import math
 import time
@@ -73,6 +74,8 @@ class Game:
         self._last_update = None        # wall-clock of the previous update tick
         self.logo = None               # menu logo texture (lazily loaded)
         self.logo_loaded = False
+        self.show_hud = True           # H toggles, for clean screenshots
+        self.want_shot = False         # F12 requests a PNG grab
 
     # ------------------------------------------------------------------ setup
     def start_race(self, difficulty):
@@ -281,17 +284,30 @@ class Game:
         glMatrixMode(GL_MODELVIEW)
         glLoadIdentity()
 
-        x, y, z = self.player.pos
+        x, y, _ = self.player.pos
         a = math.radians(self.player.angle)
         fx, fy = math.cos(a), math.sin(a)
+
+        # Follow the ROAD height under the car, not the car's own z. The body
+        # dips for potholes and rides over humps; feeding that straight into
+        # the camera made the view flicker on every bump. The road surface is
+        # smooth, so tracking it keeps the camera steady.
+        base = self.track.height_at(x, y) + C.CAR_GROUND_Z
         if self.fpv:
-            eye = (x + 12 * fx, y + 12 * fy, z + 26)
-            look = (x + 200 * fx, y + 200 * fy, z + 20)
-            gluLookAt(*eye, *look, 0, 0, 1)
+            eye = (x + 12 * fx, y + 12 * fy, base + 26)
+            look = (x + 200 * fx, y + 200 * fy, base + 20)
         else:
-            eye = (x - C.CAM_BACK * fx, y - C.CAM_BACK * fy, z + C.CAM_HEIGHT)
-            look = (x + C.CAM_LOOK_AHEAD * fx, y + C.CAM_LOOK_AHEAD * fy, z + 14)
-            gluLookAt(*eye, *look, 0, 0, 1)
+            eye = (x - C.CAM_BACK * fx, y - C.CAM_BACK * fy, base + C.CAM_HEIGHT)
+            look = (x + C.CAM_LOOK_AHEAD * fx, y + C.CAM_LOOK_AHEAD * fy,
+                    base + 14)
+            # Only guard against the eye sinking into a slope -- a plain clamp
+            # against a smooth height field, so it never jumps.
+            t = self.track
+            gh = max(t.height_at(eye[0], eye[1]),
+                     t.ground_height_at(eye[0], eye[1]))
+            if eye[2] < gh + C.CAM_MIN_CLEAR:
+                eye = (eye[0], eye[1], gh + C.CAM_MIN_CLEAR)
+        gluLookAt(*eye, *look, 0, 0, 1)
 
     def countdown_value(self):
         """Return '3'/'2'/'1'/'GO!' or None once racing has begun."""
@@ -838,12 +854,18 @@ class Game:
         self.setup_camera(self.width / self.height)
         self.draw_world()
 
-        hud.draw_minimap(self)
-        hud.draw_dashboard(self)
+        if self.show_hud:
+            hud.draw_minimap(self)
+            hud.draw_dashboard(self)
         if self.state == COUNTDOWN:
             hud.draw_countdown(self, self.countdown_value())
         if self.state in (WIN, LOSE, ENEMY_WIN, PAUSED):
             hud.draw_overlay(self)
+        if self.want_shot:                 # grab BEFORE the swap
+            self.want_shot = False
+            path = gfx.save_screenshot(self.width, self.height)
+            if path:
+                self.flash("SAVED " + os.path.basename(path), 2.0)
         glutSwapBuffers()
 
 
@@ -894,6 +916,8 @@ def _key_down(key, x, y):
         audio.stop_engine()
     elif k == b'v':
         g.fpv = not g.fpv
+    elif k == b'h':
+        g.show_hud = not g.show_hud
     elif k == b'\x1b':
         g.state = MENU
         audio.stop_engine()
@@ -930,6 +954,9 @@ def _key_up(key, x, y):
 
 def _special_down(key, x, y):
     g = APP
+    if key == GLUT_KEY_F12:            # screenshot, any state
+        g.want_shot = True
+        return
     if g.state == MENU:                    # arrow keys pick a circuit
         if key == GLUT_KEY_UP:
             g.menu_index = (g.menu_index - 1) % C.NUM_LAYOUTS
