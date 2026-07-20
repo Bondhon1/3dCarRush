@@ -85,8 +85,12 @@ ENEMY_GRADE_DOWN = 1.15        # rival speed on a full descent
 # quads bulge above the curved terrain and the grass pokes through the road.
 ROAD_TESS = 110.0              # road surface subdivision along a straight;
                               # must be fine enough to hug the rolling terrain
+ROAD_LAT_BANDS = 6             # road subdivisions ACROSS the width, so the
+                              # tarmac hugs the terrain in the middle too (else
+                              # a flat chord sinks and grass pokes through)
 GROUND_TILE = 130.0
-GROUND_DROP = 10.0              # grass sits this far below the road surface
+GROUND_DROP = 14.0             # grass sits this far below the road surface
+                              # (a touch more margin for steep INSANE hills)
 
 # Sky: real 3-D cloud volumes drifting overhead (the old flat 2-D puffs read
 # as static fog because they never parallaxed or rose into view).

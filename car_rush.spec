@@ -17,7 +17,7 @@ opengl_binaries = [
 ]
 
 a = Analysis(
-    ["main_new.py"],
+    ["main.py"],
     pathex=[],
     binaries=opengl_binaries,
     datas=[("assets/logo.png", "assets")],   # menu logo (loaded at runtime)

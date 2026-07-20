@@ -6,8 +6,8 @@ import time
 import random
 from OpenGL.GL import *
 
-from . import config as C
-from . import gfx
+import config as C
+import gfx
 
 
 def _bob(period=1.6, amp=6.0, phase=0.0):

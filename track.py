@@ -15,8 +15,8 @@ import math
 import random
 from OpenGL.GL import *
 
-from . import config as C
-from . import gfx
+import config as C
+import gfx
 
 
 KERB_SEG = 55.0          # length of one red/white kerb stripe
@@ -673,32 +673,39 @@ class Track:
         for lane_y in (cy - 100, cy, cy + 100):
             self._lane_dashes_line(start_x, lane_y, end_x, lane_y)
 
+    def _terrain_normal(self, x, y):
+        """Unit surface normal of the height field at (x, y), for lit meshes."""
+        gx = (self.height_at(x + 40, y) - self.height_at(x - 40, y)) / 80.0
+        gy = (self.height_at(x, y + 40) - self.height_at(x, y - 40)) / 80.0
+        nl = math.sqrt(gx * gx + gy * gy + 1.0)
+        return (-gx / nl, -gy / nl, 1.0 / nl)
+
     def _emit_segment(self, x0, y0, x1, y1, width):
         dx, dy = x1 - x0, y1 - y0
         L = math.hypot(dx, dy) or 1.0
         ux, uy = dx / L, dy / L
         px, py = -uy, ux
         hw = width / 2
-        # Tessellate ALONG the segment. A single long quad would be a flat
-        # chord across the rolling terrain and would sink metres below the
-        # ground in the middle -- which is exactly how the grass ended up
-        # showing through the tarmac while the (already subdivided) kerbs and
-        # lane markings stayed visible.
+        # Tessellate ALONG *and* ACROSS the road. A single quad spanning the
+        # full width is a flat chord between the two edges, so on rolling
+        # terrain the middle of the road sinks below the (finely subdivided)
+        # grass and green pokes up through the tarmac. Splitting the width into
+        # lateral bands lets the surface hug the hills across the road too.
         steps = max(1, int(L / C.ROAD_TESS))
+        lat = C.ROAD_LAT_BANDS
         glColor3f(*C.T('road'))
-        glBegin(GL_QUAD_STRIP)
-        for i in range(steps + 1):
-            t = i / steps
-            cx, cy = x0 + dx * t, y0 + dy * t
-            lx, ly = cx + px * hw, cy + py * hw
-            rx, ry = cx - px * hw, cy - py * hw
-            nx = (self.height_at(cx + ux * 40, cy + uy * 40)
-                  - self.height_at(cx - ux * 40, cy - uy * 40)) / 80.0
-            nl = math.sqrt(nx * nx + 1.0)
-            glNormal3f(-nx * ux / nl, -nx * uy / nl, 1.0 / nl)
-            glVertex3f(lx, ly, 0.1 + self.height_at(lx, ly))
-            glVertex3f(rx, ry, 0.1 + self.height_at(rx, ry))
-        glEnd()
+        for b in range(lat):
+            o0 = -hw + width * b / lat
+            o1 = -hw + width * (b + 1) / lat
+            glBegin(GL_QUAD_STRIP)
+            for i in range(steps + 1):
+                t = i / steps
+                cx, cy = x0 + dx * t, y0 + dy * t
+                for o in (o0, o1):
+                    vx, vy = cx + px * o, cy + py * o
+                    glNormal3f(*self._terrain_normal(vx, vy))
+                    glVertex3f(vx, vy, 0.1 + self.height_at(vx, vy))
+            glEnd()
         # kerbs down both edges (these already subdivide, so they follow the hills)
         self._kerb_line(x0 + px * hw, y0 + py * hw, x1 + px * hw, y1 + py * hw)
         self._kerb_line(x0 - px * hw, y0 - py * hw, x1 - px * hw, y1 - py * hw)
@@ -710,28 +717,35 @@ class Track:
         hw = width / 2
         inner, outer = radius - hw, radius + hw
         segs = 40
+        # Subdivide RADIALLY across the width as well: a single inner->outer
+        # quad is a flat chord that sinks below the terrain in the middle of the
+        # road, letting grass poke through on elevated corners.
+        rad = C.ROAD_LAT_BANDS
         glColor3f(*C.T('road'))
-        glNormal3f(0, 0, 1)
-        glBegin(GL_QUAD_STRIP)
-        for i in range(segs + 1):
-            a = a0 + (a1 - a0) * i / segs
-            ca, sa = math.cos(a), math.sin(a)
-            ix, iy = cx + inner * ca, cy + inner * sa
-            ox, oy = cx + outer * ca, cy + outer * sa
-            glVertex3f(ix, iy, 0.1 + self.height_at(ix, iy))
-            glVertex3f(ox, oy, 0.1 + self.height_at(ox, oy))
-        glEnd()
+        for b in range(rad):
+            r0 = inner + (outer - inner) * b / rad
+            r1 = inner + (outer - inner) * (b + 1) / rad
+            glBegin(GL_QUAD_STRIP)
+            for i in range(segs + 1):
+                a = a0 + (a1 - a0) * i / segs
+                ca, sa = math.cos(a), math.sin(a)
+                for r in (r0, r1):
+                    vx, vy = cx + r * ca, cy + r * sa
+                    glNormal3f(*self._terrain_normal(vx, vy))
+                    glVertex3f(vx, vy, 0.1 + self.height_at(vx, vy))
+            glEnd()
         # striped kerbs along both radii
         self._emit_arc_kerb(cx, cy, inner, a0, a1)
         self._emit_arc_kerb(cx, cy, outer, a0, a1)
-        # centre lane dashes
+        # lane dashes -- three lines (both dividers + centre) to match the
+        # straights, so the markings stay consistent through every corner
         glColor3f(*C.T('lane'))
         glBegin(GL_QUADS)
         n = 16
         for i in range(0, n, 2):
             b0 = a0 + (a1 - a0) * i / n
             b1 = a0 + (a1 - a0) * (i + 1) / n
-            for r in (radius,):
+            for r in (radius - hw / 2, radius, radius + hw / 2):
                 self._arc_mark(cx, cy, r, b0, b1)
         glEnd()
 

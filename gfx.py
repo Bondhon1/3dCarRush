@@ -17,7 +17,7 @@ from OpenGL.GLUT import (
     GLUT_BITMAP_9_BY_15, GLUT_STROKE_ROMAN,
 )
 
-from . import config as C
+import config as C
 
 _quadric = None
 

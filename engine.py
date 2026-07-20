@@ -9,13 +9,13 @@ from OpenGL.GL import *
 from OpenGL.GLU import *
 from OpenGL.GLUT import *
 
-from . import config as C
-from . import gfx
-from . import track as track_mod
-from . import props
-from . import hud
-from . import audio
-from .entities import Player, Enemy, Bullet, draw_bullets
+import config as C
+import gfx
+import track as track_mod
+import props
+import hud
+import audio
+from entities import Player, Enemy, Bullet, draw_bullets
 
 
 # Game states

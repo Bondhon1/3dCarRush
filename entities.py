@@ -9,8 +9,8 @@ import math
 import time
 from OpenGL.GL import *
 
-from . import config as C
-from . import gfx
+import config as C
+import gfx
 
 
 # ---------------------------------------------------------------------------

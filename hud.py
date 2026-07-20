@@ -4,8 +4,8 @@ import math
 import time
 from OpenGL.GL import *
 
-from . import config as C
-from . import gfx
+import config as C
+import gfx
 
 
 # ---------------------------------------------------------------------------
@@ -46,9 +46,7 @@ def draw_dashboard(g):
     gfx.text_small(x1 - 96, y1 - 84, f"of {total}", C.COL_HUD_DIM)
 
     # Rival standings (roomy vertical list)
-    # [DEBUG] confirm the running game reflects config.py: show difficulty +
-    # each rival's actual spawned speed. Remove this block once verified.
-    dname = C.DIFFICULTIES.get(getattr(g, 'difficulty', 3), {}).get('name', '?')
+    dname = C.DIFFICULTIES.get(getattr(g, 'difficulty', 3), {}).get('name', '')
     gfx.text_small(x0 + 18, y1 - 126, f"RIVALS  [{dname}]", C.COL_HUD_DIM)
     ry = y1 - 146
     for i, e in enumerate(g.enemies):
@@ -59,8 +57,6 @@ def draw_dashboard(g):
         gfx.text_small(x0 + 18, ry - i * 18, getattr(e, 'tag', f"E{i+1}"), col)
         _pips(x0 + 62, ry - 6 - i * 18, getattr(e, 'max_lives', C.ENEMY_MAX_LIVES),
               max(0, e.lives), C.COL_HUD_BAD, size=9, gap=3)
-        gfx.text_small(x0 + 150, ry - i * 18,
-                       f"spd {getattr(e, 'speed', 0):.1f}", (0.6, 0.9, 1.0))
 
     # transient flash message
     if g.message and time.time() < g.message_until:
@@ -83,7 +79,7 @@ def _pips(x, y, total, filled, color, size=14, gap=5):
 def _boost_indicator(x, y, p):
     """BOOST readiness: lit while active, a filling bar while recharging,
     'READY' once available again."""
-    from . import config as C
+    import config as C
     now = time.time()
     if p.boost_active:
         col, label, frac = C.COL_HUD_WARN, "BOOST", 1.0
@@ -268,7 +264,7 @@ def draw_countdown(g, value):
 # Result / pause overlay
 # ---------------------------------------------------------------------------
 def draw_overlay(g):
-    from .engine import WIN, LOSE, ENEMY_WIN, PAUSED
+    from engine import WIN, LOSE, ENEMY_WIN, PAUSED
     if g.state == PAUSED:
         # Deliberately minimal: a small badge instead of dimming the whole
         # screen, so a paused frame is still worth screenshotting.
