@@ -99,6 +99,8 @@ NUM_STARS = 220                # night skies only
 # Street lighting -- poles down the verges that glow after dark
 LAMP_SPACING = 900.0           # distance between poles along the road
 LAMP_HEIGHT = 150.0
+LAMP_VERGE = 90.0              # pole stands this far beyond the road edge
+LAMP_CLEAR2 = 2500.0           # reject a pole within sqrt() of any tarmac
 NUM_TREES_EXTRA = 90           # trees added on top of NUM_TREES
 
 # Bridge / lake basin

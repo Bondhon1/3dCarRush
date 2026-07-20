@@ -204,9 +204,17 @@ class Game:
                                random.uniform(260, 520)))
 
     def _spawn_lamps(self):
-        """Line the verges with street lamps, alternating sides."""
+        """Line the verges with street lamps, alternating sides.
+
+        Always drives off the freshly-built track's own centre line -- reading
+        `self.lap_waypoints` here would use the PREVIOUS race's line, since it
+        isn't assigned until after the props are spawned, which scattered lamps
+        across the new circuit (some of them standing in the road).
+        """
         self.lamps = []
-        line = self.lap_waypoints if hasattr(self, 'lap_waypoints') else             [(w[0], w[1]) for w in self.track.auto_waypoints]
+        line = [(w[0], w[1]) for w in self.track.auto_waypoints]
+        if len(line) < 2:
+            return
         acc = 0.0
         side = 1
         for i in range(len(line) - 1):
@@ -220,10 +228,19 @@ class Game:
             t = -acc
             while t < seg:
                 if t >= 0:
-                    off = (C.ROAD_WIDTH / 2 + 55) * side
-                    lx, ly = ax + ux * t + px * off, ay + uy * t + py * off
-                    face = math.degrees(math.atan2(-py * side, -px * side))
-                    self.lamps.append((lx, ly, face))
+                    # Try the intended side, then the other. On the inside of a
+                    # bend the racing line is a chord, so a fixed perpendicular
+                    # offset can still land on tarmac -- verify against the road
+                    # itself rather than trusting the geometry.
+                    for s in (side, -side):
+                        off = (C.ROAD_WIDTH / 2 + C.LAMP_VERGE) * s
+                        lx = ax + ux * t + px * off
+                        ly = ay + uy * t + py * off
+                        if self.track.is_on_road(lx, ly, radius2=C.LAMP_CLEAR2):
+                            continue                  # standing in the road
+                        face = math.degrees(math.atan2(-py * s, -px * s))
+                        self.lamps.append((lx, ly, face))
+                        break
                     side = -side
                 t += C.LAMP_SPACING
             acc = (acc + seg) % C.LAMP_SPACING
