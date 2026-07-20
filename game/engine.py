@@ -70,22 +70,27 @@ class Game:
         self.logo_loaded = False
 
     # ------------------------------------------------------------------ setup
-    def start_race(self, layout_id):
-        # theme first: the track display list and the hill lists bake their
-        # colours, so the palette must be current before anything is built
-        C.set_theme(layout_id)
+    def start_race(self, difficulty):
+        """Cut a brand-new random circuit at the chosen difficulty and line up."""
+        self.difficulty = difficulty
+        d = C.DIFFICULTIES[difficulty]
+        # A random theme each race, so back-to-back runs never look the same.
+        # Theme first: the track and hill display lists bake their colours.
+        C.set_theme(random.randint(1, len(C.THEMES)))
         gfx.apply_theme()
         props.reset_hill_cache()
         self.track.dispose()
-        self.track.build(layout_id)
-        self.player.reset()
-        self._spawn_enemies(layout_id)
+        self.track.build(difficulty)
+        self.player.reset(pos=self.track.start_pos,
+                          angle=self.track.start_angle,
+                          lives=d['lives'])
+        self._spawn_enemies(difficulty)
         self._spawn_props()
         self.bullets = []
         self.explosions = []
         # lap checkpoint = the base waypoint farthest from the finish line
         fx, fy = self.track.finish_line['pos']
-        base = self._racing_line(layout_id, fy)
+        base = self._racing_line()
         self.checkpoint = max(base, key=lambda w: (w[0] - fx) ** 2 + (w[1] - fy) ** 2)
         self.checkpoint_reached = False
         self.lap_waypoints = [(w[0], w[1]) for w in base]
@@ -103,44 +108,39 @@ class Game:
         audio.start_engine()
         audio.set_engine(0.2)
 
-    def _racing_line(self, layout_id, fy):
-        """Centre-line waypoints for a circuit.
+    def _racing_line(self, difficulty=None, fy=None):
+        """Centre-line waypoints, generated with the circuit."""
+        fl = self.track.finish_line['pos']
+        return list(self.track.auto_waypoints) + [(fl[0], fl[1], 10)]
 
-        Polygon-built tracks generate their own line (following the real
-        tarmac through arbitrary-angle bends); the legacy grid layouts use
-        their hand-authored waypoint list."""
-        auto = getattr(self.track, 'auto_waypoints', None)
-        if auto:
-            return list(auto) + [(0.0, fy + 40 * C.TRACK_SCALE, 10)]
-        return track_mod.enemy_base_waypoints(layout_id, fy)
-
-    def _spawn_enemies(self, layout_id):
-        fy = self.track.finish_line['pos'][1]
-        base = self._racing_line(layout_id, fy)
+    def _spawn_enemies(self, difficulty):
+        base = self._racing_line()
         self.enemies = []
-        S = C.TRACK_SCALE
-        # each rival races a laterally-offset copy of the base racing line.
-        # The offset is a lateral position *within the road*, so it stays
-        # unscaled (road width is fixed); only the classification threshold and
-        # the longitudinal grid slots scale with the enlarged track.
-        offsets = [-70, 0, 70]
-        # ...but starts in its own non-overlapping grid slot beside the player
-        grid = [(-140, -600 * S), (150, -600 * S), (-30, -520 * S)]
-        for i, off in enumerate(offsets):
+        d = C.DIFFICULTIES[difficulty]
+        # Rivals race laterally-offset copies of the centre line. Offsets are
+        # perpendicular to the LOCAL road direction, so they work on a circuit
+        # running at any angle (not just axis-aligned legs).
+        sx, sy = self.track.start_pos
+        sa = math.radians(self.track.start_angle)
+        fwd = (math.cos(sa), math.sin(sa))
+        right = (fwd[1], -fwd[0])
+        for i, off in enumerate((-70, 0, 70)):
             path = []
-            bx0, by0 = base[0][0], base[0][1]
-            for (x, y, z) in base:
-                if abs(x - bx0) < 1000 * S:      # vertical run -> shift X
-                    path.append((x + off, y, z))
-                elif abs(y - by0) < 1000 * S:    # horizontal run -> shift Y
-                    path.append((x, y + off, z))
-                else:
-                    path.append((x + off, y + off, z))
-            # rivals push harder than the player's cruise speed (difficulty):
-            # you must boost, grab kits and use the gun to stay ahead
-            e = Enemy(path, random.uniform(C.ENEMY_SPEED_MIN, C.ENEMY_SPEED_MAX))
-            gx, gy = grid[i]
-            e.pos = [gx, gy, C.CAR_GROUND_Z]
+            for j, (x, y, z) in enumerate(base):
+                nx, ny = base[min(j + 1, len(base) - 1)][:2]
+                dx, dy = nx - x, ny - y
+                dl = math.hypot(dx, dy) or 1.0
+                px, py = dy / dl, -dx / dl       # local perpendicular
+                path.append((x + px * off, y + py * off, z))
+            e = Enemy(path, random.uniform(*d['enemy_speed']))
+            e.fire_gap = d['enemy_fire']
+            # grid slots: staggered behind the start line, across the road
+            lane = (-140, 150, -30)[i]
+            back = (-90, -90, -230)[i]
+            e.pos = [sx + right[0] * lane + fwd[0] * back,
+                     sy + right[1] * lane + fwd[1] * back,
+                     C.CAR_GROUND_Z]
+            e.angle = self.track.start_angle
             self.enemies.append(e)
 
     def _spawn_props(self):
@@ -149,7 +149,8 @@ class Game:
         self.health_kits = road[:C.NUM_HEALTH_KITS]
         self.shield_kits = road[C.NUM_HEALTH_KITS:C.NUM_HEALTH_KITS + C.NUM_SHIELD_KITS]
         i = C.NUM_HEALTH_KITS + C.NUM_SHIELD_KITS
-        self.bombs = list(road[i:i + C.NUM_BOMBS])
+        n_bombs = C.DIFFICULTIES[getattr(self, 'difficulty', 3)]['bombs']
+        self.bombs = list(road[i:i + n_bombs])
         self._spawn_scenery()
 
     def _spawn_scenery(self):
@@ -352,6 +353,7 @@ class Game:
             self._pickup_and_hazards(now)
 
         self._update_bullets(fs)
+        self._update_body(now, fs)      # hump ride + pothole suspension dip
 
         # finish line
         self._check_finish(fx, fy)
@@ -365,6 +367,29 @@ class Game:
         audio.play('explosion', 0.9)
         audio.stop_engine()
         audio.set_boost(False)
+
+    def _update_body(self, now, fs):
+        """Settle the car's height and pitch onto whatever it's driving over.
+
+        Taken gently, a speed breaker is now RIDDEN: the body follows the
+        hump's actual surface (and tips nose-up then nose-down over the crest)
+        instead of ploughing straight through it.  Pothole dips are layered on
+        top.  Everything is eased so the motion reads as suspension travel."""
+        p = self.player
+        bump_pitch, bump_drop = p.bump_offset(now)
+        if p.jump_active:
+            p.pitch += (bump_pitch - p.pitch) * min(1.0, 0.3 * fs)
+            return
+        ride_z, ride_pitch = 0.0, 0.0
+        for br in self.track.speed_breakers:
+            z = props.breaker_surface_z(br, p.pos[0], p.pos[1])
+            if z > 0.0:
+                ride_z = z
+                ride_pitch = props.breaker_pitch(br, p.pos[0], p.pos[1])
+                break
+        target_z = C.CAR_GROUND_Z + ride_z + bump_drop
+        p.pos[2] += (target_z - p.pos[2]) * min(1.0, 0.35 * fs)
+        p.pitch += ((ride_pitch + bump_pitch) - p.pitch) * min(1.0, 0.3 * fs)
 
     def _update_jump(self, now):
         p = self.player
@@ -432,8 +457,8 @@ class Game:
         # speed-breaker jumps (so rivals arc over the hump instead of clipping)
         for e in E:
             if not e.jump_active:
-                for (sx, sy, w, d) in self.track.speed_breakers:
-                    if abs(e.pos[0] - sx) <= w / 2 and abs(e.pos[1] - sy) <= d / 2:
+                for br in self.track.speed_breakers:
+                    if props.breaker_local(br, e.pos[0], e.pos[1])[0] is not None:
                         e.jump_active = True
                         e.jump_start = now
                         break
@@ -489,8 +514,9 @@ class Game:
             for (hx, hy, r, _pts) in self.track.potholes:
                 if math.hypot(px - hx, py - hy) < r + C.POTHOLE_HIT_RADIUS:
                     p.pothole_until = now + C.POTHOLE_SLOW_TIME
+                    p.bump_start = now              # suspension dip animation
                     self.pothole_cd = now + 1.0
-                    audio.play('crash', 0.28)
+                    audio.play('thud', 0.85)
                     self.flash("POTHOLE!", 0.9)
                     break
 
@@ -498,30 +524,27 @@ class Game:
         # +/- d/2 across Y). One bump per pass (cooldown); no life loss -- just
         # a jump and a brief loss of momentum if taken fast.
         if not p.jump_active and now >= self.breaker_cd:
-            for (sx, sy, w, d) in self.track.speed_breakers:
-                if abs(px - sx) <= w / 2 and abs(py - sy) <= d / 2:
+            for br in self.track.speed_breakers:
+                if props.breaker_local(br, px, py)[0] is None:
+                    continue
+                # A hump taken at speed launches the car (and costs a life);
+                # taken gently you simply ride up and over it -- the ride-over
+                # is handled every frame in _update_breaker_ride().
+                if p.speed >= C.NORMAL_SPEED * C.BREAKER_FAST_LAUNCH:
                     p.jump_active = True
                     p.jump_start = now
+                    p.jump_mode = "jump"
                     self.breaker_cd = now + 1.2
-                    # Legacy parity: a gentle roll-over is harmless, but taking
-                    # a hump at speed launches the car AND costs a life (the
-                    # "too much speed + speed breaker = hazard" rule).
-                    if p.speed <= C.SLOW_SPEED + 0.1:
-                        p.jump_mode = "hit"
-                        audio.play('crash', 0.25)
-                    else:
-                        p.jump_mode = "jump"
-                        fast = p.speed >= C.BREAKER_FAST_SPEED
-                        p.boost_active = False        # kills a boost; slows you
-                        p.speed = C.NORMAL_SPEED * 0.8
-                        audio.play('crash', 0.6)
-                        if fast and not p.shield_active:
-                            p.lives = max(0, p.lives - C.BREAKER_FAST_DAMAGE)
-                            self.explosions.append(props.Explosion(px, py, 0.5))
-                            self.flash("SPEED BREAKER!", 1.2)
-                            if p.lives <= 0:
-                                self._lose()
-                    break
+                    p.boost_active = False        # kills a boost; slows you
+                    p.speed = C.NORMAL_SPEED * 0.8
+                    audio.play('crash', 0.6)
+                    if not p.shield_active:
+                        p.lives = max(0, p.lives - C.BREAKER_FAST_DAMAGE)
+                        self.explosions.append(props.Explosion(px, py, 0.5))
+                        self.flash("SPEED BREAKER!", 1.2)
+                        if p.lives <= 0:
+                            self._lose()
+                break
 
     def _update_bullets(self, fs=1.0):
         alive = []
@@ -572,8 +595,13 @@ class Game:
         front_x = p.pos[0] + C.CAR_LENGTH / 2 * fx
         front_y = p.pos[1] + C.CAR_LENGTH / 2 * fy
         fxc, fyc = fl['pos']
-        over_line = abs(front_x - fxc) < fl['width'] / 2 and abs(front_y - fyc) < 24
-        if not over_line:
+        # Test in the finish line's own frame so it works at ANY orientation
+        # (procedural circuits cross the line at arbitrary angles).
+        tx, ty = self.finish_dir
+        dx, dy = front_x - fxc, front_y - fyc
+        along = dx * tx + dy * ty            # distance past the line
+        across = -dx * ty + dy * tx          # lateral offset along the line
+        if abs(across) > fl['width'] / 2 or abs(along) > 30:
             return
         if not self.checkpoint_reached:
             return                            # haven't run the lap yet
@@ -613,8 +641,8 @@ class Game:
             props.draw_rock(rx, ry, rs, ra)
         for (tx, ty, ts) in self.trees:
             props.draw_tree(tx, ty, ts)
-        for (sx, sy, w, d) in self.track.speed_breakers:
-            props.draw_speed_breaker(sx, sy, w, d)
+        for (sx, sy, w, d, ang) in self.track.speed_breakers:
+            props.draw_speed_breaker(sx, sy, w, d, ang)
         for (hx, hy) in self.health_kits:
             props.draw_health_kit(hx, hy)
         for (sx, sy) in self.shield_kits:
@@ -662,12 +690,6 @@ APP = None
 # ---------------------------------------------------------------------------
 # GLUT callbacks
 # ---------------------------------------------------------------------------
-def _preview_theme(g):
-    """Paint the menu backdrop in the highlighted circuit's colours."""
-    C.set_theme(g.menu_index + 1)
-    gfx.apply_theme()
-
-
 def _display():
     APP.display()
 
@@ -692,7 +714,6 @@ def _key_down(key, x, y):
             g.start_race(g.menu_index + 1)
         elif k.isdigit() and 1 <= int(k) <= C.NUM_LAYOUTS:
             g.menu_index = int(k) - 1
-            _preview_theme(g)
         elif k == b'\x1b':
             sys.exit(0)
         return
@@ -749,10 +770,8 @@ def _special_down(key, x, y):
     if g.state == MENU:                    # arrow keys pick a circuit
         if key == GLUT_KEY_UP:
             g.menu_index = (g.menu_index - 1) % C.NUM_LAYOUTS
-            _preview_theme(g)
         elif key == GLUT_KEY_DOWN:
             g.menu_index = (g.menu_index + 1) % C.NUM_LAYOUTS
-            _preview_theme(g)
         return
     if key == GLUT_KEY_LEFT:
         g.gun_left = True

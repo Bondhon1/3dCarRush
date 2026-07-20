@@ -114,27 +114,102 @@ class Explosion:
 # ---------------------------------------------------------------------------
 # Speed breaker -- striped hump across the road
 # ---------------------------------------------------------------------------
-def draw_speed_breaker(x, y, width=400, depth=150, height=34):
-    """Half-cylinder hump; ``width`` spans across the road (X), depth along Y."""
+def breaker_local(br, x, y):
+    """Transform a world point into a hump's local frame.
+
+    Returns ``(along, across)`` -- distance along the direction of travel and
+    laterally across the road -- or ``(None, None)`` if the point is off the
+    hump.  Works at any road angle, which procedural circuits need."""
+    bx, by, w, d, ang = br
+    a = math.radians(ang)
+    ca, sa = math.cos(a), math.sin(a)
+    dx, dy = x - bx, y - by
+    along = dx * ca + dy * sa          # spans the hump's depth
+    across = -dx * sa + dy * ca        # spans the road width
+    if abs(along) <= d / 2 and abs(across) <= w / 2:
+        return along, across
+    return None, None
+
+
+# A raised-cosine ramp: height H at the crest, and -- unlike a half-circle --
+# it meets the tarmac with ZERO slope at both edges, so a car rolls on and off
+# smoothly instead of hitting a vertical wall.
+def _breaker_profile(t):
+    return C.BREAKER_HEIGHT * 0.5 * (1.0 + math.cos(math.pi * t))
+
+
+def _breaker_slope(t, depth):
+    return -C.BREAKER_HEIGHT * math.pi * math.sin(math.pi * t) / depth
+
+
+def breaker_surface_z(br, x, y):
+    """Height of the hump's surface under a point (0 when off the hump).
+
+    Driving slowly now RIDES this profile instead of ploughing through it."""
+    along, _ = breaker_local(br, x, y)
+    if along is None:
+        return 0.0
+    return _breaker_profile(2.0 * along / br[3])
+
+
+def breaker_pitch(br, x, y):
+    """Body pitch (degrees, + = nose down) for a car sitting on the hump."""
+    along, _ = breaker_local(br, x, y)
+    if along is None:
+        return 0.0
+    slope = _breaker_slope(2.0 * along / br[3], br[3])
+    pitch = -math.degrees(math.atan(slope))   # nose rises on the way up
+    return max(-C.BREAKER_MAX_PITCH, min(C.BREAKER_MAX_PITCH, pitch))
+
+
+def draw_speed_breaker(x, y, width=C.BREAKER_WIDTH, depth=C.BREAKER_DEPTH,
+                       angle=0.0, height=C.BREAKER_HEIGHT):
+    """A proper road hump: a smooth rounded ridge banded with hazard stripes
+    running across the road, with closed ends and a grounded rubber skirt."""
     glPushMatrix()
     glTranslatef(x, y, 0)
-    slices = 22
-    for i in range(slices):
-        t0 = i / slices * math.pi
-        t1 = (i + 1) / slices * math.pi
-        y0 = math.cos(t0) * depth / 2
-        z0 = math.sin(t0) * height
-        y1 = math.cos(t1) * depth / 2
-        z1 = math.sin(t1) * height
-        glColor3f(*((0.95, 0.85, 0.1) if i % 2 == 0 else (0.1, 0.1, 0.1)))
-        ny = (z1 - z0)
-        nz = -(y1 - y0)
+    glRotatef(angle, 0, 0, 1)          # local +X = travel, +Y = across the road
+    segs, stripes = 18, 10
+
+    def profile(i):
+        t = -1.0 + 2.0 * i / segs
+        return t * depth / 2, height * 0.5 * (1.0 + math.cos(math.pi * t)), t
+
+    # striped shell
+    for s in range(stripes):
+        y0 = -width / 2 + width * s / stripes
+        y1 = -width / 2 + width * (s + 1) / stripes
+        glColor3f(*((0.96, 0.78, 0.06) if s % 2 == 0 else (0.11, 0.11, 0.12)))
+        glBegin(GL_QUAD_STRIP)
+        for i in range(segs + 1):
+            u, z, t = profile(i)
+            slope = -height * math.pi * math.sin(math.pi * t) / depth
+            nl = math.hypot(slope, 1.0)
+            glNormal3f(-slope / nl, 0.0, 1.0 / nl)
+            glVertex3f(u, y0, z)
+            glVertex3f(u, y1, z)
+        glEnd()
+
+    # closed ends so the hump doesn't read as hollow
+    for sy, ny in ((-width / 2, -1.0), (width / 2, 1.0)):
+        glColor3f(0.13, 0.13, 0.14)
+        glBegin(GL_TRIANGLE_FAN)
+        glNormal3f(0.0, ny, 0.0)
+        glVertex3f(0.0, sy, 0.0)
+        for i in range(segs + 1):
+            u, z, _ = profile(i)
+            glVertex3f(u, sy, z)
+        glEnd()
+
+    # dark skirt where the hump meets the tarmac
+    glColor3f(0.08, 0.08, 0.09)
+    glNormal3f(0, 0, 1)
+    for u0, u1 in ((-depth / 2 - 5, -depth / 2), (depth / 2, depth / 2 + 5)):
         glBegin(GL_QUADS)
-        glNormal3f(0, ny, nz)
-        glVertex3f(-width / 2, y0, z0)
-        glVertex3f(width / 2, y0, z0)
-        glVertex3f(width / 2, y1, z1)
-        glVertex3f(-width / 2, y1, z1)
+        glVertex3f(u0, -width / 2, 0.35)
+        glVertex3f(u1, -width / 2, 0.35)
+        glVertex3f(u1, width / 2, 0.35)
+        glVertex3f(u0, width / 2, 0.35)
         glEnd()
     glPopMatrix()
 

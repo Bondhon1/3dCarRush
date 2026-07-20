@@ -31,11 +31,12 @@ def _wheel(wx, wy, wz, radius, width):
     glPopMatrix()
 
 
-def draw_car(x, y, z, angle, body, accent, gun_angle=None, bank=0.0):
+def draw_car(x, y, z, angle, body, accent, gun_angle=None, bank=0.0, pitch=0.0):
     """Draw a lit, detailed car.
 
     ``gun_angle`` (if given) mounts a tracking turret; ``bank`` rolls the body
-    into corners so a turning car leans instead of pivoting flat like a robot.
+    into corners so a turning car leans instead of pivoting flat like a robot;
+    ``pitch`` tips the nose down (+) or up (-) for bumps and hump crests.
     """
     S = C.CAR_SCALE
     glPushMatrix()
@@ -43,6 +44,8 @@ def draw_car(x, y, z, angle, body, accent, gun_angle=None, bank=0.0):
     glRotatef(angle, 0, 0, 1)
     if bank:
         glRotatef(bank, 1, 0, 0)          # lean into the turn (roll about forward)
+    if pitch:
+        glRotatef(pitch, 0, 1, 0)         # nose dips/rises about the lateral axis
 
     # lower skirt (darker, slightly wider) grounds the car visually
     glColor3f(*(c * 0.6 for c in body))
@@ -118,13 +121,19 @@ class Player:
     def __init__(self):
         self.reset()
 
-    def reset(self):
-        self.pos = list(C.PLAYER_START)
-        self.angle = 90.0            # facing +Y (north), matches legacy start
+    def reset(self, pos=None, angle=90.0, lives=None):
+        """Place the car on the grid. Procedural circuits pass their own start
+        position and heading, so the car always lines up down the straight."""
+        self.pos = list(pos) if pos else list(C.PLAYER_START)
+        if len(self.pos) < 3:
+            self.pos = [self.pos[0], self.pos[1], C.CAR_GROUND_Z]
+        self.angle = angle
         self.speed = C.NORMAL_SPEED
         self.gun_angle = 0.0         # relative to car forward
-        self.lives = C.PLAYER_MAX_LIVES
+        self.lives = C.PLAYER_MAX_LIVES if lives is None else lives
         self.finished = False
+        self.bump_start = -99.0      # pothole dip animation clock
+        self.pitch = 0.0             # current body pitch (bumps + hump crests)
         self.boost_active = False
         self.boost_start = 0.0
         self.boost_cd_until = 0.0     # earliest time the next boost may fire
@@ -142,9 +151,22 @@ class Player:
     def bullet_angle(self):
         return self.angle + self.gun_angle
 
+    def bump_offset(self, now):
+        """Suspension response to a pothole: a quick nose-down dip that eases
+        back up, returned as (pitch_degrees, z_drop). Smooth and self-settling."""
+        t = now - self.bump_start
+        if t < 0 or t > C.POTHOLE_BUMP_TIME:
+            return 0.0, 0.0
+        u = t / C.POTHOLE_BUMP_TIME
+        # one damped oscillation: down, back up, settle
+        env = (1.0 - u) ** 2
+        wave = math.sin(u * 2.0 * math.pi)
+        return C.POTHOLE_BUMP_PITCH * wave * env, -C.POTHOLE_BUMP_DROP * wave * env
+
     def draw(self):
         draw_car(self.pos[0], self.pos[1], self.pos[2], self.angle,
-                 C.COL_PLAYER_BODY, C.COL_PLAYER_ACCENT, self.gun_angle)
+                 C.COL_PLAYER_BODY, C.COL_PLAYER_ACCENT, self.gun_angle,
+                 pitch=self.pitch)
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +187,7 @@ class Enemy:
         self.bank = 0.0              # current body roll (smoothed, degrees)
         self.gun_angle = 0.0         # turret heading relative to body forward
         self.fire_cd = 0.0           # next time this rival may shoot
+        self.fire_gap = C.ENEMY_FIRE_COOLDOWN   # seconds between shots (difficulty)
         self.aiming = False          # turret currently tracking the player
         if len(path) > 1:
             dx = path[1][0] - path[0][0]
@@ -252,7 +275,7 @@ class Enemy:
         # fire only when the barrel is actually lined up and cooled down
         aligned = abs(((want - self.gun_angle + 180) % 360) - 180) < 12
         if aligned and now >= self.fire_cd:
-            self.fire_cd = now + C.ENEMY_FIRE_COOLDOWN
+            self.fire_cd = now + self.fire_gap
             a = math.radians(self.angle + self.gun_angle)
             return Bullet(self.pos[0] + C.CAR_LENGTH / 2 * math.cos(a),
                           self.pos[1] + C.CAR_LENGTH / 2 * math.sin(a),

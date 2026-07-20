@@ -197,6 +197,21 @@ def _make_boost():
     return _to_sound(sig, 0.35)
 
 
+def _make_thud():
+    """Dull suspension thump for dropping into a pothole."""
+    np = _np
+    dur = 0.28
+    n = int(_RATE * dur)
+    t = np.linspace(0, dur, n, endpoint=False)
+    # low body resonance sliding down, plus a short gritty scuff
+    body = np.sin(2 * np.pi * 95 * (1 - 0.45 * t) * t)
+    body += 0.5 * np.sin(2 * np.pi * 58 * (1 - 0.3 * t) * t)
+    scuff = 0.35 * _lowpass(_noise(n), 0.18) * np.exp(-t * 26)
+    sig = (body * np.exp(-t * 13) + scuff)
+    sig /= np.max(np.abs(sig)) + 1e-6
+    return _to_sound(sig, 0.7)
+
+
 def _make_beep(freq=440, dur=0.18):
     np = _np
     n = int(_RATE * dur)
@@ -233,6 +248,7 @@ def init():
         _sounds['pickup'] = _make_pickup()
         _sounds['shield'] = _make_shield()
         _sounds['boost'] = _make_boost()
+        _sounds['thud'] = _make_thud()
         _sounds['beep'] = _make_beep(523)
         _sounds['go'] = _make_beep(880, 0.4)
         _engine_channel = pygame.mixer.Channel(0)

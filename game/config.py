@@ -26,17 +26,67 @@ GRID = 8                       # collision grid resolution for road/border sets
 # comfortably wide while the laps get bigger and the corners more sweeping).
 TRACK_SCALE = 1.5
 
-NUM_LAYOUTS = 5                # selectable circuits on the start menu
+NUM_LAYOUTS = 5                # menu entries (now DIFFICULTY levels, see below)
+
+# ---------------------------------------------------------------------------
+# Difficulty presets
+#
+# The circuit itself is generated procedurally and differently every race, so
+# the five menu entries select how HARD that race is rather than which fixed
+# track you drive.  Each preset shapes the generated layout (corner count and
+# how irregular it is), the rivals, and how many hazards are strewn about.
+# ---------------------------------------------------------------------------
+DIFFICULTIES = {
+    1: dict(name="ROOKIE",  desc="Open, flowing circuit",
+            corners=(6, 7),  size=3000, radius_var=(0.86, 1.14),
+            enemy_speed=(5.8, 6.6), enemy_fire=2.6, damage_scale=2.6,
+            bombs=3, breakers=1, lives=12),
+    2: dict(name="AMATEUR", desc="A few real corners",
+            corners=(7, 8),  size=2900, radius_var=(0.82, 1.18),
+            enemy_speed=(6.4, 7.2), enemy_fire=2.2, damage_scale=2.2,
+            bombs=4, breakers=1, lives=11),
+    3: dict(name="PRO",     desc="Technical and quick",
+            corners=(8, 10), size=2800, radius_var=(0.78, 1.22),
+            enemy_speed=(7.0, 8.0), enemy_fire=1.8, damage_scale=1.9,
+            bombs=6, breakers=2, lives=10),
+    4: dict(name="EXPERT",  desc="Tight, punishing line",
+            corners=(9, 11), size=2750, radius_var=(0.74, 1.26),
+            enemy_speed=(7.6, 8.6), enemy_fire=1.5, damage_scale=1.6,
+            bombs=7, breakers=2, lives=9),
+    5: dict(name="INSANE",  desc="Relentless rivals",
+            corners=(10, 13), size=2700, radius_var=(0.70, 1.30),
+            enemy_speed=(8.2, 9.2), enemy_fire=1.2, damage_scale=1.4,
+            bombs=9, breakers=3, lives=8),
+}
+
+# Generator guard-rails (unscaled layout units)
+GEN_MIN_EDGE = 1150.0          # shortest allowed straight between corners
+GEN_MIN_ANGLE = 68.0           # tightest allowed interior angle (degrees)
+GEN_FILLET = 320.0             # nominal corner radius before edge clamping
 
 # Broken-road detailing. One "damage cluster" (pothole + cracks + grit) is
 # scattered per this many square world-units of asphalt; lower = rougher road.
-ROAD_DAMAGE_AREA = 136000.0    # halved density -- potholes are an event, not a texture
+# Base density; each difficulty multiplies this by its `damage_scale`, so a
+# bigger number means FEWER potholes.
+ROAD_DAMAGE_AREA = 150000.0
 ROAD_PATCH_AREA = 210000.0     # resurfaced repair squares are rarer
 
 # Hitting a pothole costs you momentum (no damage, just a bogged-down moment).
 POTHOLE_SLOW_TIME = 2.0        # seconds
 POTHOLE_SLOW_FACTOR = 0.8      # 20% slower while it lasts
 POTHOLE_HIT_RADIUS = 14.0      # extra reach beyond the hole's own radius
+POTHOLE_BUMP_TIME = 0.55       # seconds of the dip-and-recover animation
+POTHOLE_BUMP_PITCH = 7.0       # peak nose-down tilt (degrees)
+POTHOLE_BUMP_DROP = 4.5        # peak body drop (world units)
+
+# ---------------------------------------------------------------------------
+# Speed breakers (humps)
+# ---------------------------------------------------------------------------
+BREAKER_WIDTH = 400.0          # spans across the road
+BREAKER_DEPTH = 170.0          # along the direction of travel
+BREAKER_HEIGHT = 18.0          # crest height (low + long = a believable ramp)
+BREAKER_MAX_PITCH = 20.0       # clamp so cresting never looks cartoonish
+BREAKER_FAST_LAUNCH = 1.15     # speed multiple of NORMAL above which you launch
 
 # ---------------------------------------------------------------------------
 # Car dimensions (world units)

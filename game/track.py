@@ -1,9 +1,14 @@
-"""Track building: the three proven hand-built layouts, re-rendered.
+"""Track building: procedurally generated circuits.
 
-The layout coordinates come straight from the legacy game (so the racing lines,
-finish line and speed-breaker placements stay exactly as tuned), but the
-geometry is now emitted as lit surfaces with striped 3D kerbs and compiled into
-a display list so the static world is drawn in a single fast call each frame.
+Every race cuts a brand-new circuit.  A randomised *radial* polygon (vertices
+sorted by angle, so it can never cross itself) is relaxed until every corner is
+drivable, then filleted into real sweeping bends by ``_polygon_circuit``.  The
+chosen difficulty controls how many corners it has and how irregular they are,
+and the builder also hands back the centre-line racing line the AI follows, the
+grid/start heading, and the placement of the finish line and speed breakers.
+
+Geometry is emitted as lit surfaces with striped 3D kerbs and weathered asphalt,
+compiled into one display list so the static world costs a single call a frame.
 """
 
 import math
@@ -31,29 +36,37 @@ class Track:
         self.finish_line = None       # {'pos': (x, y), 'angle', 'width'}
         self.speed_breakers = []      # [(x, y, width, depth)]
         self.mini_points = []         # down-sampled road points for the minimap
-        self.layout_id = 1
+        self.layout_id = 1            # difficulty level this circuit was cut for
         self._list = None
         # pre-generated surface damage (positions kept so gameplay can react)
         self.potholes = []            # [(x, y, r, outline_pts)]
         self.patches = []             # [(x, y, hw, hh)]
         self.cracks = []              # [(polyline_pts, width)]
-        # racing line produced by the polygon builder (empty for legacy layouts)
-        self.auto_waypoints = []
+        self.auto_waypoints = []      # centre-line racing line (scaled)
+        self._edges = []              # straights between filleted corners
+        self._start_edge = None
+        self.start_raw = (0.0, 0.0)   # unscaled grid position
+        self.start_pos = (0.0, 0.0)   # scaled world position of the grid
+        self.start_angle = 90.0       # heading the cars line up on
 
     # -- public API --------------------------------------------------------
-    def build(self, layout_id):
+    def build(self, difficulty, seed=None):
+        """Generate a brand-new random circuit tuned to ``difficulty``."""
         self.__init__()
-        self.layout_id = layout_id
-        {1: self._layout1, 2: self._layout2, 3: self._layout3,
-         4: self._layout4, 5: self._layout5}[layout_id]()
-        # Scale the non-geometry markers (finish + breakers) to match the
-        # enlarged pieces. Their WIDTH/DEPTH stay unscaled (road width is fixed).
+        self.layout_id = difficulty
+        rng = random.Random(seed if seed is not None else random.randrange(1 << 30))
+        self._seed = seed
+        self._generate(difficulty, rng)
+        self._place_start_and_furniture(difficulty, rng)
+        # Scale the markers to match the enlarged geometry. Their WIDTH/DEPTH
+        # stay unscaled (road width is fixed).
         S = C.TRACK_SCALE
         fx, fy = self.finish_line['pos']
         self.finish_line['pos'] = (fx * S, fy * S)
-        self.speed_breakers = [(x * S, y * S, w, d)
-                               for (x, y, w, d) in self.speed_breakers]
-        self._generate_damage()
+        self.start_pos = (self.start_raw[0] * S, self.start_raw[1] * S)
+        self.speed_breakers = [(x * S, y * S, w, d, a)
+                               for (x, y, w, d, a) in self.speed_breakers]
+        self._generate_damage(C.DIFFICULTIES[difficulty]['damage_scale'])
         self.mini_points = list(self.road_points)[::4]
 
     def draw(self):
@@ -255,11 +268,14 @@ class Track:
             if f:
                 T1, T2, cc, a0, a1, r = f
                 self._curve(cc[0], cc[1], r, a0, a1, width=width)
+        self._edges = []
         for i in range(n):
             cur, nxt = fil[i], fil[(i + 1) % n]
             start = cur[1] if cur else pts[i]
             end = nxt[0] if nxt else pts[(i + 1) % n]
+            self._edges.append((start, end))
             self._segment(start[0], start[1], end[0], end[1], width)
+        self._start_edge = self._edges[0]
 
         # racing line: leave corner 0, run the loop, come back through corner 0
         wps = []
@@ -346,7 +362,7 @@ class Track:
             self.patches.append((rng.uniform(x0 + inset, x1 - inset),
                                  rng.uniform(y0 + inset, y1 - inset),
                                  rng.uniform(26, 60), rng.uniform(26, 60)))
-        for _ in range(int(area / C.ROAD_DAMAGE_AREA)):
+        for _ in range(int(area / self._dmg_area)):
             self._gen_cluster(rng.uniform(x0 + inset, x1 - inset),
                               rng.uniform(y0 + inset, y1 - inset), rng)
 
@@ -356,7 +372,7 @@ class Track:
         pad = 30.0
         if r_out - r_in < 2 * pad:
             return
-        for _ in range(int(area / C.ROAD_DAMAGE_AREA)):
+        for _ in range(int(area / self._dmg_area)):
             a = a0 + (a1 - a0) * rng.random()
             r = rng.uniform(r_in + pad, r_out - pad)
             self._gen_cluster(cx + r * math.cos(a), cy + r * math.sin(a),
@@ -379,13 +395,17 @@ class Track:
             o = rng.uniform(-hw, hw)
             self.patches.append((x0 + ux * t + px * o, y0 + uy * t + py * o,
                                  rng.uniform(26, 55), rng.uniform(26, 55)))
-        for _ in range(int(area / C.ROAD_DAMAGE_AREA)):
+        for _ in range(int(area / self._dmg_area)):
             t = rng.uniform(40, L - 40)
             o = rng.uniform(-hw, hw)
             self._gen_cluster(x0 + ux * t + px * o, y0 + uy * t + py * o, rng)
 
-    def _generate_damage(self):
-        """Walk every emitted piece and scatter wear across it (seeded)."""
+    def _generate_damage(self, scale=1.0):
+        """Walk every emitted piece and scatter wear across it (seeded).
+
+        ``scale`` divides the density -- higher difficulties leave a rougher
+        road, easier ones a cleaner one."""
+        self._dmg_area = C.ROAD_DAMAGE_AREA * scale
         rng = random.Random(self.layout_id * 7919 + 13)
         self.potholes, self.patches, self.cracks = [], [], []
         for p in self.pieces:
@@ -645,111 +665,109 @@ class Track:
         glPopMatrix()
         glPopMatrix()
 
-    # -- layouts (coordinates ported verbatim from the legacy game) --------
-    def _layout1(self):
-        L = C.G_LENGTH
-        self._straight(0, -L, 2 * L)
-        self._curve(100, L - 1200, 200, math.pi, math.pi + math.pi / 2, 100)
-        self._horizontal(L - 1400, 200, 1600)
-        self._curve(1800, -L - 400, 200, 0, math.pi / 2)
-        self._straight(2000, -L - 1600, 2 * L)
-        self._straight(2000, -L - 2800, 2 * L)
-        self._curve(1700, L - 4000, 200, 0, -math.pi / 2, 100)
-        self._horizontal(L - 4200, 200, 1600)
-        self._horizontal(L - 4200, -2200, 2400)
-        self._curve(-2300, L - 4000, 200, -math.pi, -math.pi / 2, 100)
-        self._straight(-2400, -L - 2800, 6 * L + 400)
-        self._curve(-2300, L, 200, math.pi, math.pi / 2, 100)
-        self._horizontal(L + 200, -2200, 2000)
-        self._curve(-300, L, 200, 0, math.pi / 2, 100)
-        self.finish_line = {'pos': (0, -L - 60), 'angle': 0, 'width': 450}
-        self.speed_breakers = [(2000, -2800, 400, 150)]
 
-    def _layout2(self):
-        L = C.G_LENGTH
-        self._straight(0, -L - 2400, 6 * L)
-        self._curve(-300, L - 3600, 200, 0, -math.pi / 2, 100)
-        self._horizontal(L - 3800, -3400, 3200)
-        self._curve(-3500, L - 4000, 200, math.pi, math.pi / 2, 100)
-        self._straight(-3600, -L - 4000, 2 * L)
-        self._curve(-3900, L - 5200, 200, 0, -math.pi / 2, 100)
-        self._horizontal(L - 5400, -6000, 2200)
-        self._curve(-6100, L - 5200, 200, -math.pi, -math.pi / 2, 100)
-        self._straight(-6200, -L - 4000, 8 * L + 400)
-        self._curve(-6100, L, 200, math.pi, math.pi / 2, 100)
-        self._horizontal(L + 200, -6000, 5800)
-        self._curve(-300, L, 200, 0, math.pi / 2, 100)
-        self.finish_line = {'pos': (0, -L - 2400 + 40), 'angle': 0, 'width': 450}
-        self.speed_breakers = [(-3600, -4000, 400, 150)]
+    # -- procedural circuit generation -------------------------------------
+    def _generate(self, difficulty, rng):
+        """Create a fresh, randomised circuit for the given difficulty.
 
-    def _layout3(self):
-        L = C.G_LENGTH
-        self._straight(0, -L - 2400, 6 * L)
-        self._curve(-300, L - 3600, 200, 0, -math.pi / 2, 100)
-        self._horizontal(L - 3800, -5000, 4800)
-        self._curve(-5100, L - 3600, 200, -math.pi, -math.pi / 2, 100)
-        self._straight(-5200, -L - 2400, 6 * L)
-        self._curve(-5100, L, 200, math.pi, math.pi / 2, 100)
-        self._horizontal(L + 200, -5000, 4800)
-        self._curve(-300, L, 200, 0, math.pi / 2, 100)
-        self.finish_line = {'pos': (0, -L - 2400 + 40), 'angle': 0, 'width': 450}
-        self.speed_breakers = [(-5200, -2400, 400, 150)]
+        The shape is a *radial* polygon -- vertices sorted by angle around a
+        centre -- which is guaranteed not to intersect itself, so every
+        generated track is a valid closed loop.  Randomising the vertex count,
+        their angles and their radii is what makes each race a different
+        circuit instead of the same straight-then-left-turn every time.
+        The polygon is then relaxed to remove corners that would be too sharp
+        or straights that would be too short to drive, and finally filleted by
+        _polygon_circuit() into real sweeping bends.
+        """
+        d = C.DIFFICULTIES[difficulty]
+        n = rng.randint(*d['corners'])
+        base = d['size']
 
-    def _layout4(self):
-        """Alpine Forest -- a flowing, open circuit of sweeping diagonal bends.
+        # vertices: evenly spread angles with jitter, radii varied per corner
+        step = 2 * math.pi / n
+        angles = sorted(i * step + rng.uniform(-0.32, 0.32) * step
+                        for i in range(n))
+        radii = [base * rng.uniform(*d['radius_var']) for _ in range(n)]
+        for _ in range(2):      # soften wild radius jumps between neighbours
+            radii = [(radii[i - 1] + 2 * radii[i] + radii[(i + 1) % n]) / 4.0
+                     for i in range(n)]
+        pts = [[math.cos(a) * r, math.sin(a) * r]
+               for a, r in zip(angles, radii)]
 
-        Built as a filleted polygon, so none of these corners is a right angle:
-        the track leans and arcs the whole way round."""
-        self._polygon_circuit([
-            (0, -1000),        # below the start line
-            (0, 900),          # north up the start straight
-            (-1300, 2050),     # sweeping left onto a diagonal
-            (-2950, 1500),
-            (-3250, -400),     # long west run
-            (-1850, -1550),
-            (-600, -1650),     # back across the south
-        ], radius=340)
-        self.finish_line = {'pos': (0, -500), 'angle': 0, 'width': 450}
-        self.speed_breakers = [(0, 300, 400, 150)]
+        pts = self._relax(pts)
+        # rotate so the LONGEST straight is edge 0 -- that becomes the
+        # start/finish straight, giving every generated track a proper
+        # pit-straight to line up on
+        n = len(pts)
+        k = max(range(n), key=lambda i: math.hypot(
+            pts[(i + 1) % n][0] - pts[i][0], pts[(i + 1) % n][1] - pts[i][1]))
+        pts = pts[k:] + pts[:k]
+        self._polygon_circuit(pts, radius=C.GEN_FILLET)
+        return pts
 
-    def _layout5(self):
-        """Canyon Sunset -- a technical circuit built around a tight hairpin.
+    def _relax(self, pts, iterations=14):
+        """Push the polygon into something drivable.
 
-        The sharp polygon corner near the west end fillets down into a genuine
-        U-turn, with gentler sweepers everywhere else."""
-        self._polygon_circuit([
-            (0, -1250),        # below the start line
-            (0, 800),          # north up the start straight
-            (-1150, 1850),     # sweeper left
-            (-2650, 1250),
-            (-2400, -150),     # drops south
-            (-3450, -1250),    # sharp corner -> hairpin
-            (-1950, -1950),
-            (-300, -1950),     # long southern run home
-        ], radius=300)
-        self.finish_line = {'pos': (0, -700), 'angle': 0, 'width': 450}
-        self.speed_breakers = [(0, 200, 400, 150)]
+        Drops vertices that make a straight too short for a corner arc to fit,
+        and eases corners that are sharper than the AI (and the player) can
+        reasonably take by nudging them outward from the centre.
+        """
+        for _ in range(iterations):
+            n = len(pts)
+            if n <= 5:
+                break
+            # 1) remove a vertex if its incoming edge is too short
+            worst_i, worst_len = -1, C.GEN_MIN_EDGE
+            for i in range(n):
+                a, b = pts[i], pts[(i + 1) % n]
+                L = math.hypot(b[0] - a[0], b[1] - a[1])
+                if L < worst_len:
+                    worst_len, worst_i = L, i
+            if worst_i >= 0:
+                pts.pop((worst_i + 1) % len(pts))
+                continue
+            # 2) open up any corner that is too tight
+            changed = False
+            n = len(pts)
+            for i in range(n):
+                p, c, q = pts[(i - 1) % n], pts[i], pts[(i + 1) % n]
+                v1 = (p[0] - c[0], p[1] - c[1])
+                v2 = (q[0] - c[0], q[1] - c[1])
+                l1 = math.hypot(*v1) or 1.0
+                l2 = math.hypot(*v2) or 1.0
+                dot = max(-1.0, min(1.0, (v1[0] * v2[0] + v1[1] * v2[1]) / (l1 * l2)))
+                theta = math.degrees(math.acos(dot))
+                if theta < C.GEN_MIN_ANGLE:
+                    r = math.hypot(c[0], c[1]) or 1.0
+                    pts[i] = [c[0] / r * (r * 1.12), c[1] / r * (r * 1.12)]
+                    changed = True
+            if not changed:
+                break
+        return pts
 
-
-# Enemy waypoint paths per layout (ported from legacy get_enemy_paths_for_layout).
-# ``finish_y`` arrives ALREADY scaled (it comes from the scaled finish line), so
-# only the hand-authored coordinates need multiplying by TRACK_SCALE here.
-def enemy_base_waypoints(layout_id, finish_y):
-    S = C.TRACK_SCALE
-
-    def P(x, y):
-        return (x * S, y * S, 10)
-
-    last = (0.0, finish_y + 40 * S, 10)
-    if layout_id == 1:
-        return [P(0, -600), P(30, 800), P(-2300, 800),
-                P(-2300, -3600), P(2000, -3600),
-                P(2000, -800), P(0, -800), last]
-    if layout_id == 2:
-        return [P(0, -600), P(30, 800), P(-6200, 800),
-                P(-6200, -4800), P(-3600, -4800),
-                P(-3600, -3200), P(0, -3200), last]
-    # Layouts 4 and 5 are polygon-built: they generate their own racing line in
-    # Track.auto_waypoints (see Game._racing_line), so they need no entry here.
-    return [P(0, -600), P(0, 800), P(-5200, 800),
-            P(-5200, -3200), P(0, -3200), last]
+    def _place_start_and_furniture(self, difficulty, rng):
+        """Put the start line on the longest straight and scatter humps."""
+        a, b = self._start_edge
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        L = math.hypot(dx, dy) or 1.0
+        ux, uy = dx / L, dy / L
+        self.start_raw = (a[0] + ux * L * 0.22, a[1] + uy * L * 0.22)
+        self.start_angle = math.degrees(math.atan2(uy, ux))
+        self.finish_line = {
+            'pos': (a[0] + ux * L * 0.55, a[1] + uy * L * 0.55),
+            'angle': self.start_angle + 90.0,     # strip lies across the road
+            'width': 450,
+        }
+        # speed breakers: on other straights, oriented along the road
+        self.speed_breakers = []
+        edges = [e for e in self._edges[1:]]        # never on the start straight
+        rng.shuffle(edges)
+        for (p, q) in edges[:C.DIFFICULTIES[difficulty]['breakers']]:
+            ex, ey = q[0] - p[0], q[1] - p[1]
+            el = math.hypot(ex, ey) or 1.0
+            t = rng.uniform(0.35, 0.65)
+            self.speed_breakers.append((
+                p[0] + ex * t, p[1] + ey * t,
+                C.BREAKER_WIDTH, C.BREAKER_DEPTH,
+                math.degrees(math.atan2(ey, ex)),
+            ))

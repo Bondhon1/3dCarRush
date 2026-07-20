@@ -206,12 +206,11 @@ def draw_menu(g):
                      C.COL_HUD_EDGE, 3.0)
         sub_y = g.height - 150
     gfx.text_centered(g.width / 2, sub_y,
-                      "Outrun the rivals. Reach the finish first.",
+                      "A new circuit is generated every race. Pick your fight.",
                       C.COL_HUD_TEXT)
 
-    # track cards -- named after each circuit's theme so the list tells you
-    # what world you're picking, not just a number
-    names = [f"CIRCUIT {i}  ·  {C.THEMES[i]['name']}"
+    # difficulty cards -- the circuit itself is randomised each race
+    names = [f"{C.DIFFICULTIES[i]['name']}  ·  {C.DIFFICULTIES[i]['desc']}"
              for i in range(1, C.NUM_LAYOUTS + 1)]
     cw, ch = 460, 52
     cx = g.width / 2
