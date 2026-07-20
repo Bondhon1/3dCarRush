@@ -256,12 +256,9 @@ def draw_sky(width, height, horizon_frac=0.55, yaw=0.0):
     sun_y = hy + height * 0.09
     _draw_wrapped(width * 0.62, yaw_shift, period, width, sun_y, _draw_sun, height)
 
-    # Soft layered clouds. Each has a stable azimuth + height + size; near
-    # clouds (bigger) drift a touch faster than far ones for gentle depth.
-    for az, cyf, s, par in _CLOUDS:
-        shift = yaw_shift * par + wind * (0.6 + 0.4 * par)
-        _draw_wrapped(width * az, shift, period, width,
-                      height * cyf, _cloud, height * 0.05 * s)
+    # NOTE: clouds are real 3-D volumes now (see draw_sky_bodies). The old
+    # screen-space puffs that used to be drawn here read as flat patches of
+    # fog pasted on the horizon, so they are gone.
 
     glPopMatrix()
     glMatrixMode(GL_PROJECTION)
@@ -531,10 +528,16 @@ def build_sky(rng):
         cx = rng.uniform(-C.CLOUD_SPREAD, C.CLOUD_SPREAD)
         cy = rng.uniform(-C.CLOUD_SPREAD, C.CLOUD_SPREAD)
         cz = rng.uniform(*C.CLOUD_Z)
-        scale = rng.uniform(150.0, 340.0)
-        puffs = [(rng.uniform(-1.5, 1.5), rng.uniform(-0.8, 0.8),
-                  rng.uniform(-0.18, 0.18), rng.uniform(0.55, 1.0))
-                 for _ in range(rng.randint(4, 7))]
+        scale = rng.uniform(170.0, 380.0)
+        # many smaller, widely-spread puffs read as a soft mass; a handful of
+        # big spheres reads as a solid blob
+        puffs = []
+        for _ in range(rng.randint(9, 14)):
+            u = rng.uniform(-1.0, 1.0)
+            puffs.append((u * 2.2,
+                          rng.uniform(-1.0, 1.0) * 1.1,
+                          rng.uniform(-0.10, 0.22) - 0.10 * u * u,
+                          rng.uniform(0.34, 0.78) * (1.0 - 0.35 * abs(u))))
         _clouds.append((cx, cy, cz, scale, puffs))
     _stars = []
     for _ in range(C.NUM_STARS):
@@ -584,12 +587,13 @@ def draw_sky_bodies(cam):
         for (px, py, pz, ps) in puffs:
             glPushMatrix()
             glTranslatef(px * scale, py * scale, pz * scale)
-            glScalef(ps * scale, ps * scale * 0.8, ps * scale * 0.42)
-            glColor4f(*lit, 0.92)
-            sphere(1.0, 12, 9)
-            glColor4f(*shade, 0.5)          # slightly darker base
-            glPushMatrix(); glTranslatef(0, 0, -0.35); glScalef(0.9, 0.9, 0.5)
-            sphere(1.0, 10, 7); glPopMatrix()
+            # flattened puffs, translucent so overlaps build up softly
+            glScalef(ps * scale, ps * scale * 0.9, ps * scale * 0.38)
+            glColor4f(*lit, 0.42)
+            sphere(1.0, 10, 8)
+            glColor4f(*shade, 0.26)         # shaded underside
+            glPushMatrix(); glTranslatef(0, 0, -0.30); glScalef(0.94, 0.94, 0.55)
+            sphere(1.0, 9, 7); glPopMatrix()
             glPopMatrix()
         glPopMatrix()
 

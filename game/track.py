@@ -751,22 +751,30 @@ class Track:
         glPushMatrix()
         glTranslatef(x, y, self.height_at(x, y))
         glRotatef(angle, 0, 0, 1)
-        # checkered strip
+        # Checkered strip, laid in WORLD space against the terrain: the road can
+        # rise tens of units across the line's 450-unit width, so a flat strip
+        # would sink into the tarmac at one end and hover at the other.
         check = 40
         cols = int(width / check)
-        depth = 2
+        ar = math.radians(angle)
+        car_, sar = math.cos(ar), math.sin(ar)
+        glPopMatrix()                      # back to world space for the strip
         glNormal3f(0, 0, 1)
         for i in range(cols):
             for j in range(2):
                 glColor3f(*((0.95, 0.95, 0.95) if (i + j) % 2 == 0 else (0.08, 0.08, 0.08)))
-                x0 = -width / 2 + i * check
-                y0 = -check + j * check
+                u0 = -width / 2 + i * check
+                v0 = -check + j * check
                 glBegin(GL_QUADS)
-                glVertex3f(x0, y0, 1.2)
-                glVertex3f(x0 + check, y0, 1.2)
-                glVertex3f(x0 + check, y0 + check, 1.2)
-                glVertex3f(x0, y0 + check, 1.2)
+                for (uu, vv) in ((u0, v0), (u0 + check, v0),
+                                 (u0 + check, v0 + check), (u0, v0 + check)):
+                    wx = x + car_ * uu - sar * vv
+                    wy = y + sar * uu + car_ * vv
+                    glVertex3f(wx, wy, self.height_at(wx, wy) + 1.6)
                 glEnd()
+        glPushMatrix()                     # re-enter the local frame for the gantry
+        glTranslatef(x, y, self.height_at(x, y))
+        glRotatef(angle, 0, 0, 1)
         # gantry posts + banner
         post = 12
         top = 150

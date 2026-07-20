@@ -163,42 +163,61 @@ def breaker_pitch(br, x, y):
 
 
 def draw_speed_breaker(x, y, width=C.BREAKER_WIDTH, depth=C.BREAKER_DEPTH,
-                       angle=0.0, base_z=0.0, height=C.BREAKER_HEIGHT):
-    """A proper road hump: a smooth rounded ridge banded with hazard stripes
-    running across the road, with closed ends and a grounded rubber skirt."""
-    glPushMatrix()
-    glTranslatef(x, y, base_z)
-    glRotatef(angle, 0, 0, 1)          # local +X = travel, +Y = across the road
-    segs, stripes = 18, 10
+                       angle=0.0, base_z=0.0, height=C.BREAKER_HEIGHT,
+                       height_fn=None):
+    """A proper road hump: a rounded ridge banded with hazard stripes across
+    the road, closed ends, and a grounded rubber skirt.
 
-    def profile(i):
+    Built directly in WORLD space and sampled against ``height_fn`` at every
+    vertex, so it follows the road up and down. Drawn flat (as it used to be)
+    a hump buries one end in the tarmac and floats the other clear of it --
+    the road can rise 50+ units across a footprint while the hump is only ~18
+    tall.
+    """
+    h = height_fn or (lambda wx, wy: base_z)
+    a = math.radians(angle)
+    ca, sa = math.cos(a), math.sin(a)        # travel direction
+    px, py = -sa, ca                         # across the road
+    segs, stripes = 16, 10
+
+    def world(u, v):
+        """u = along travel, v = across the road -> world x, y, road z."""
+        wx = x + ca * u + px * v
+        wy = y + sa * u + py * v
+        return wx, wy, h(wx, wy)
+
+    def prof(i):
         t = -1.0 + 2.0 * i / segs
         return t * depth / 2, height * 0.5 * (1.0 + math.cos(math.pi * t)), t
 
     # striped shell
-    for s in range(stripes):
-        y0 = -width / 2 + width * s / stripes
-        y1 = -width / 2 + width * (s + 1) / stripes
-        glColor3f(*((0.96, 0.78, 0.06) if s % 2 == 0 else (0.11, 0.11, 0.12)))
+    for sIdx in range(stripes):
+        v0 = -width / 2 + width * sIdx / stripes
+        v1 = -width / 2 + width * (sIdx + 1) / stripes
+        glColor3f(*((0.96, 0.78, 0.06) if sIdx % 2 == 0 else (0.11, 0.11, 0.12)))
         glBegin(GL_QUAD_STRIP)
         for i in range(segs + 1):
-            u, z, t = profile(i)
+            u, z, t = prof(i)
             slope = -height * math.pi * math.sin(math.pi * t) / depth
             nl = math.hypot(slope, 1.0)
-            glNormal3f(-slope / nl, 0.0, 1.0 / nl)
-            glVertex3f(u, y0, z)
-            glVertex3f(u, y1, z)
+            nx, nz = -slope / nl, 1.0 / nl
+            glNormal3f(nx * ca, nx * sa, nz)
+            for v in (v0, v1):
+                wx, wy, wz = world(u, v)
+                glVertex3f(wx, wy, wz + z)
         glEnd()
 
-    # closed ends so the hump doesn't read as hollow
-    for sy, ny in ((-width / 2, -1.0), (width / 2, 1.0)):
+    # closed ends
+    for v, sgn in ((-width / 2, -1.0), (width / 2, 1.0)):
         glColor3f(0.13, 0.13, 0.14)
         glBegin(GL_TRIANGLE_FAN)
-        glNormal3f(0.0, ny, 0.0)
-        glVertex3f(0.0, sy, 0.0)
+        glNormal3f(px * sgn, py * sgn, 0.0)
+        wx, wy, wz = world(0.0, v)
+        glVertex3f(wx, wy, wz)
         for i in range(segs + 1):
-            u, z, _ = profile(i)
-            glVertex3f(u, sy, z)
+            u, z, _ = prof(i)
+            wx, wy, wz = world(u, v)
+            glVertex3f(wx, wy, wz + z)
         glEnd()
 
     # dark skirt where the hump meets the tarmac
@@ -206,12 +225,11 @@ def draw_speed_breaker(x, y, width=C.BREAKER_WIDTH, depth=C.BREAKER_DEPTH,
     glNormal3f(0, 0, 1)
     for u0, u1 in ((-depth / 2 - 5, -depth / 2), (depth / 2, depth / 2 + 5)):
         glBegin(GL_QUADS)
-        glVertex3f(u0, -width / 2, 0.35)
-        glVertex3f(u1, -width / 2, 0.35)
-        glVertex3f(u1, width / 2, 0.35)
-        glVertex3f(u0, width / 2, 0.35)
+        for (uu, vv) in ((u0, -width / 2), (u1, -width / 2),
+                         (u1, width / 2), (u0, width / 2)):
+            wx, wy, wz = world(uu, vv)
+            glVertex3f(wx, wy, wz + 0.35)
         glEnd()
-    glPopMatrix()
 
 
 # ---------------------------------------------------------------------------

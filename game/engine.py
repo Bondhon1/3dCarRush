@@ -800,7 +800,7 @@ class Game:
         for (lx, ly, la) in getattr(self, 'lamps', []):
             props.draw_street_lamp(lx, ly, la, base_z=H(lx, ly), night=night)
         for (sx, sy, w, d, ang) in self.track.speed_breakers:
-            props.draw_speed_breaker(sx, sy, w, d, ang, base_z=RH(sx, sy))
+            props.draw_speed_breaker(sx, sy, w, d, ang, height_fn=RH)
         # pickups and hazards live ON THE ROAD -> road height, so they float
         # correctly above the tarmac instead of sinking into the hillside
         for (hx, hy) in self.health_kits:
