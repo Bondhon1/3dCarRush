@@ -48,6 +48,12 @@ class Track:
         self.start_raw = (0.0, 0.0)   # unscaled grid position
         self.start_pos = (0.0, 0.0)   # scaled world position of the grid
         self.start_angle = 90.0       # heading the cars line up on
+        # terrain height field (flat until _init_elevation runs)
+        self.elev_amp = 0.0
+        self.e_k1 = self.e_k2 = self.e_k3 = 0.001
+        self.e_p1 = self.e_p2 = self.e_p3 = 0.0
+        self.bridge = None            # (x, y, angle, length) scaled, or None
+        self.bowl = None              # (x, y, radius, depth) lake basin under it
 
     # -- public API --------------------------------------------------------
     def build(self, difficulty, seed=None):
@@ -56,6 +62,7 @@ class Track:
         self.layout_id = difficulty
         rng = random.Random(seed if seed is not None else random.randrange(1 << 30))
         self._seed = seed
+        self._init_elevation(difficulty, rng)
         self._generate(difficulty, rng)
         self._place_start_and_furniture(difficulty, rng)
         # Scale the markers to match the enlarged geometry. Their WIDTH/DEPTH
@@ -66,6 +73,11 @@ class Track:
         self.start_pos = (self.start_raw[0] * S, self.start_raw[1] * S)
         self.speed_breakers = [(x * S, y * S, w, d, a)
                                for (x, y, w, d, a) in self.speed_breakers]
+        if self.bridge_raw:
+            bx, by, ba, blen = self.bridge_raw
+            self.bridge = (bx * S, by * S, ba, blen * S)
+            ox, oy, orr, od = self.bowl_raw
+            self.bowl = (ox * S, oy * S, orr * S, od)
         self._generate_damage(C.DIFFICULTIES[difficulty]['damage_scale'])
         self.mini_points = list(self.road_points)[::4]
 
@@ -81,6 +93,54 @@ class Track:
         if self._list is not None:
             glDeleteLists(self._list, 1)
             self._list = None
+
+    # -- terrain elevation --------------------------------------------------
+    # The world is no longer flat: a smooth 2-D height field rolls the whole
+    # landscape (road, ground and scenery all read from it), so circuits climb
+    # and drop.  It is a closed-form function, so height_at() is cheap enough
+    # to call per-vertex while baking and per-frame for the cars.
+    def height_at(self, x, y):
+        a = self.elev_amp
+        if a <= 0.0:
+            return 0.0
+        return a * (math.sin(x * self.e_k1 + self.e_p1) *
+                    math.cos(y * self.e_k2 + self.e_p2)
+                    + 0.55 * math.sin((x + y) * self.e_k3 + self.e_p3))
+
+    def ground_height_at(self, x, y):
+        """Terrain height for the LANDSCAPE (grass + scenery).
+
+        Identical to the road height except inside the bridge bowl, where the
+        ground scoops away into a lake basin.  Keeping the two separate is what
+        lets the road stay level and span the water as a real bridge instead of
+        diving into it."""
+        h = self.height_at(x, y)
+        if self.bowl:
+            bx, by, br, bd = self.bowl
+            d2 = (x - bx) ** 2 + (y - by) ** 2
+            if d2 < br * br:
+                t = 1.0 - d2 / (br * br)
+                h -= bd * t * t
+        return h
+
+    def slope_along(self, x, y, dx, dy, probe=60.0):
+        """Gradient (rise/run) heading in direction (dx, dy) from (x, y)."""
+        if self.elev_amp <= 0.0:
+            return 0.0
+        h0 = self.height_at(x, y)
+        h1 = self.height_at(x + dx * probe, y + dy * probe)
+        return (h1 - h0) / probe
+
+    def _init_elevation(self, difficulty, rng):
+        d = C.DIFFICULTIES[difficulty]
+        self.elev_amp = C.ELEV_BASE_AMP * d['elev']
+        # wavelengths long enough that hills are gentle sweeps, not ripples
+        self.e_k1 = 2 * math.pi / rng.uniform(*C.ELEV_WAVELEN)
+        self.e_k2 = 2 * math.pi / rng.uniform(*C.ELEV_WAVELEN)
+        self.e_k3 = 2 * math.pi / rng.uniform(*C.ELEV_WAVELEN)
+        self.e_p1 = rng.uniform(0, 6.283)
+        self.e_p2 = rng.uniform(0, 6.283)
+        self.e_p3 = rng.uniform(0, 6.283)
 
     def is_on_road(self, x, y, radius2=12000):
         for rx, ry in self.road_points:
@@ -313,11 +373,12 @@ class Track:
             self._emit_finish(self.finish_line)
 
     def _quad(self, verts, color, nz=(0, 0, 1)):
+        """Emit a quad, lifting every vertex onto the terrain height field."""
         glColor3f(*color)
         glNormal3f(*nz)
         glBegin(GL_QUADS)
         for v in verts:
-            glVertex3f(*v)
+            glVertex3f(v[0], v[1], v[2] + self.height_at(v[0], v[1]))
         glEnd()
 
     # -- broken / weathered asphalt -----------------------------------------
@@ -430,19 +491,20 @@ class Track:
     def _draw_damage(self):
         glNormal3f(0, 0, 1)
         for (cx, cy, hw, hh) in self.patches:
+            h = self.height_at(cx, cy)
             glColor3f(*C.COL_ROAD_CRACK)
             glBegin(GL_QUADS)
-            glVertex3f(cx - hw - 3, cy - hh - 3, self._DMG_Z)
-            glVertex3f(cx + hw + 3, cy - hh - 3, self._DMG_Z)
-            glVertex3f(cx + hw + 3, cy + hh + 3, self._DMG_Z)
-            glVertex3f(cx - hw - 3, cy + hh + 3, self._DMG_Z)
+            glVertex3f(cx - hw - 3, cy - hh - 3, self._DMG_Z + h)
+            glVertex3f(cx + hw + 3, cy - hh - 3, self._DMG_Z + h)
+            glVertex3f(cx + hw + 3, cy + hh + 3, self._DMG_Z + h)
+            glVertex3f(cx - hw - 3, cy + hh + 3, self._DMG_Z + h)
             glEnd()
             glColor3f(*C.COL_ROAD_PATCH)
             glBegin(GL_QUADS)
-            glVertex3f(cx - hw, cy - hh, self._DMG_Z + 0.02)
-            glVertex3f(cx + hw, cy - hh, self._DMG_Z + 0.02)
-            glVertex3f(cx + hw, cy + hh, self._DMG_Z + 0.02)
-            glVertex3f(cx - hw, cy + hh, self._DMG_Z + 0.02)
+            glVertex3f(cx - hw, cy - hh, self._DMG_Z + 0.02 + h)
+            glVertex3f(cx + hw, cy - hh, self._DMG_Z + 0.02 + h)
+            glVertex3f(cx + hw, cy + hh, self._DMG_Z + 0.02 + h)
+            glVertex3f(cx - hw, cy + hh, self._DMG_Z + 0.02 + h)
             glEnd()
 
         glColor3f(*C.COL_ROAD_CRACK)
@@ -453,11 +515,13 @@ class Track:
                 dx, dy = bx - ax, by - ay
                 L = math.hypot(dx, dy) or 1.0
                 ox, oy = -dy / L * w / 2, dx / L * w / 2
+                ha = self._DMG_Z + 0.02 + self.height_at(ax, ay)
+                hb = self._DMG_Z + 0.02 + self.height_at(bx, by)
                 glBegin(GL_QUADS)
-                glVertex3f(ax - ox, ay - oy, self._DMG_Z + 0.02)
-                glVertex3f(ax + ox, ay + oy, self._DMG_Z + 0.02)
-                glVertex3f(bx + ox, by + oy, self._DMG_Z + 0.02)
-                glVertex3f(bx - ox, by - oy, self._DMG_Z + 0.02)
+                glVertex3f(ax - ox, ay - oy, ha)
+                glVertex3f(ax + ox, ay + oy, ha)
+                glVertex3f(bx + ox, by + oy, hb)
+                glVertex3f(bx - ox, by - oy, hb)
                 glEnd()
                 w = max(1.2, w * 0.8)      # cracks taper as they run out
 
@@ -466,12 +530,22 @@ class Track:
                                     (1.00, C.COL_ROAD_CRACK, self._DMG_Z + 0.03),
                                     (0.62, C.COL_ROAD_HOLE, self._DMG_Z + 0.05)):
                 glColor3f(*color)
+                zh = z + self.height_at(cx, cy)
                 glBegin(GL_POLYGON)
                 for (px, py) in pts:
-                    glVertex3f(cx + (px - cx) * scale, cy + (py - cy) * scale, z)
+                    glVertex3f(cx + (px - cx) * scale, cy + (py - cy) * scale, zh)
                 glEnd()
 
     def _road_slab(self, x0, x1, y0, y1):
+        # (legacy axis-aligned slab) route through the tessellating emitter so
+        # it follows the terrain too
+        if abs(x1 - x0) > abs(y1 - y0):
+            self._emit_segment(x0, (y0 + y1) / 2, x1, (y0 + y1) / 2, abs(y1 - y0))
+        else:
+            self._emit_segment((x0 + x1) / 2, y0, (x0 + x1) / 2, y1, abs(x1 - x0))
+        return
+
+    def _road_slab_flat(self, x0, x1, y0, y1):
         self._quad([(x0, y0, 0.1), (x1, y0, 0.1), (x1, y1, 0.1), (x0, y1, 0.1)],
                    C.T('road'))
         # darker feather along both long edges for a worn-asphalt read
@@ -529,10 +603,11 @@ class Track:
             e = min(s + LANE_DASH, length)
             x0, y0 = ax + ux * s, ay + uy * s
             x1, y1 = ax + ux * e, ay + uy * e
-            glVertex3f(x0 - px * halfw, y0 - py * halfw, 0.6)
-            glVertex3f(x0 + px * halfw, y0 + py * halfw, 0.6)
-            glVertex3f(x1 + px * halfw, y1 + py * halfw, 0.6)
-            glVertex3f(x1 - px * halfw, y1 - py * halfw, 0.6)
+            for (vx, vy) in ((x0 - px * halfw, y0 - py * halfw),
+                             (x0 + px * halfw, y0 + py * halfw),
+                             (x1 + px * halfw, y1 + py * halfw),
+                             (x1 - px * halfw, y1 - py * halfw)):
+                glVertex3f(vx, vy, 0.6 + self.height_at(vx, vy))
             s = e + LANE_GAP
         glEnd()
 
@@ -560,14 +635,29 @@ class Track:
         ux, uy = dx / L, dy / L
         px, py = -uy, ux
         hw = width / 2
-        a = (x0 + px * hw, y0 + py * hw)
-        b = (x1 + px * hw, y1 + py * hw)
-        c = (x1 - px * hw, y1 - py * hw)
-        d = (x0 - px * hw, y0 - py * hw)
-        self._quad([(a[0], a[1], 0.1), (b[0], b[1], 0.1),
-                    (c[0], c[1], 0.1), (d[0], d[1], 0.1)], C.T('road'))
-        self._kerb_line(a[0], a[1], b[0], b[1])
-        self._kerb_line(d[0], d[1], c[0], c[1])
+        # Tessellate ALONG the segment. A single long quad would be a flat
+        # chord across the rolling terrain and would sink metres below the
+        # ground in the middle -- which is exactly how the grass ended up
+        # showing through the tarmac while the (already subdivided) kerbs and
+        # lane markings stayed visible.
+        steps = max(1, int(L / C.ROAD_TESS))
+        glColor3f(*C.T('road'))
+        glBegin(GL_QUAD_STRIP)
+        for i in range(steps + 1):
+            t = i / steps
+            cx, cy = x0 + dx * t, y0 + dy * t
+            lx, ly = cx + px * hw, cy + py * hw
+            rx, ry = cx - px * hw, cy - py * hw
+            nx = (self.height_at(cx + ux * 40, cy + uy * 40)
+                  - self.height_at(cx - ux * 40, cy - uy * 40)) / 80.0
+            nl = math.sqrt(nx * nx + 1.0)
+            glNormal3f(-nx * ux / nl, -nx * uy / nl, 1.0 / nl)
+            glVertex3f(lx, ly, 0.1 + self.height_at(lx, ly))
+            glVertex3f(rx, ry, 0.1 + self.height_at(rx, ry))
+        glEnd()
+        # kerbs down both edges (these already subdivide, so they follow the hills)
+        self._kerb_line(x0 + px * hw, y0 + py * hw, x1 + px * hw, y1 + py * hw)
+        self._kerb_line(x0 - px * hw, y0 - py * hw, x1 - px * hw, y1 - py * hw)
         for o in (-hw / 2, 0.0, hw / 2):
             self._lane_dashes_line(x0 + px * o, y0 + py * o,
                                    x1 + px * o, y1 + py * o)
@@ -582,8 +672,10 @@ class Track:
         for i in range(segs + 1):
             a = a0 + (a1 - a0) * i / segs
             ca, sa = math.cos(a), math.sin(a)
-            glVertex3f(cx + inner * ca, cy + inner * sa, 0.1)
-            glVertex3f(cx + outer * ca, cy + outer * sa, 0.1)
+            ix, iy = cx + inner * ca, cy + inner * sa
+            ox, oy = cx + outer * ca, cy + outer * sa
+            glVertex3f(ix, iy, 0.1 + self.height_at(ix, iy))
+            glVertex3f(ox, oy, 0.1 + self.height_at(ox, oy))
         glEnd()
         # striped kerbs along both radii
         self._emit_arc_kerb(cx, cy, inner, a0, a1)
@@ -602,10 +694,11 @@ class Track:
     def _arc_mark(self, cx, cy, r, b0, b1, halfw=5):
         c0, s0 = math.cos(b0), math.sin(b0)
         c1, s1 = math.cos(b1), math.sin(b1)
-        glVertex3f(cx + (r - halfw) * c0, cy + (r - halfw) * s0, 0.6)
-        glVertex3f(cx + (r + halfw) * c0, cy + (r + halfw) * s0, 0.6)
-        glVertex3f(cx + (r + halfw) * c1, cy + (r + halfw) * s1, 0.6)
-        glVertex3f(cx + (r - halfw) * c1, cy + (r - halfw) * s1, 0.6)
+        for (vx, vy) in ((cx + (r - halfw) * c0, cy + (r - halfw) * s0),
+                         (cx + (r + halfw) * c0, cy + (r + halfw) * s0),
+                         (cx + (r + halfw) * c1, cy + (r + halfw) * s1),
+                         (cx + (r - halfw) * c1, cy + (r - halfw) * s1)):
+            glVertex3f(vx, vy, 0.6 + self.height_at(vx, vy))
 
     def _emit_arc_kerb(self, cx, cy, r, a0, a1):
         h = C.BORDER_HEIGHT
@@ -631,7 +724,7 @@ class Track:
         angle = fl['angle']
         width = fl['width']
         glPushMatrix()
-        glTranslatef(x, y, 0)
+        glTranslatef(x, y, self.height_at(x, y))
         glRotatef(angle, 0, 0, 1)
         # checkered strip
         check = 40
@@ -758,6 +851,23 @@ class Track:
             'angle': self.start_angle + 90.0,     # strip lies across the road
             'width': 450,
         }
+        # Bridge: span the longest non-start straight over a scooped-out lake.
+        self.bridge_raw = None
+        self.bowl_raw = None
+        others = list(self._edges[1:])
+        if others:
+            bp, bq = max(others, key=lambda e: math.hypot(e[1][0] - e[0][0],
+                                                         e[1][1] - e[0][1]))
+            elen = math.hypot(bq[0] - bp[0], bq[1] - bp[1])
+            if elen > 1400:
+                mx, my = (bp[0] + bq[0]) / 2, (bp[1] + bq[1]) / 2
+                span = min(elen * 0.5, 1100)
+                self.bridge_raw = (mx, my,
+                                   math.degrees(math.atan2(bq[1] - bp[1],
+                                                           bq[0] - bp[0])),
+                                   span)
+                self.bowl_raw = (mx, my, span * 0.85, C.BRIDGE_DEPTH)
+
         # speed breakers: on other straights, oriented along the road
         self.speed_breakers = []
         edges = [e for e in self._edges[1:]]        # never on the start straight

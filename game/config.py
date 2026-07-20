@@ -39,25 +39,53 @@ NUM_LAYOUTS = 5                # menu entries (now DIFFICULTY levels, see below)
 DIFFICULTIES = {
     1: dict(name="ROOKIE",  desc="Open, flowing circuit",
             corners=(6, 7),  size=3000, radius_var=(0.86, 1.14),
-            enemy_speed=(5.8, 6.6), enemy_fire=2.6, damage_scale=2.6,
-            bombs=3, breakers=1, lives=12),
+            enemy_speed=(6.7, 7.5), enemy_fire=2.6, damage_scale=2.6,
+            bombs=3, breakers=1, lives=12, catchup=0.10, enemy_lives=3, elev=0.35),
     2: dict(name="AMATEUR", desc="A few real corners",
             corners=(7, 8),  size=2900, radius_var=(0.82, 1.18),
-            enemy_speed=(6.4, 7.2), enemy_fire=2.2, damage_scale=2.2,
-            bombs=4, breakers=1, lives=11),
+            enemy_speed=(7.3, 8.1), enemy_fire=2.2, damage_scale=2.2,
+            bombs=4, breakers=1, lives=11, catchup=0.18, enemy_lives=4, elev=0.60),
     3: dict(name="PRO",     desc="Technical and quick",
             corners=(8, 10), size=2800, radius_var=(0.78, 1.22),
-            enemy_speed=(7.0, 8.0), enemy_fire=1.8, damage_scale=1.9,
-            bombs=6, breakers=2, lives=10),
+            enemy_speed=(7.9, 8.9), enemy_fire=1.8, damage_scale=1.9,
+            bombs=6, breakers=2, lives=10, catchup=0.26, enemy_lives=5, elev=0.85),
     4: dict(name="EXPERT",  desc="Tight, punishing line",
             corners=(9, 11), size=2750, radius_var=(0.74, 1.26),
-            enemy_speed=(7.6, 8.6), enemy_fire=1.5, damage_scale=1.6,
-            bombs=7, breakers=2, lives=9),
+            enemy_speed=(8.6, 9.6), enemy_fire=1.5, damage_scale=1.6,
+            bombs=7, breakers=2, lives=9, catchup=0.34, enemy_lives=6, elev=1.05),
     5: dict(name="INSANE",  desc="Relentless rivals",
             corners=(10, 13), size=2700, radius_var=(0.70, 1.30),
-            enemy_speed=(8.2, 9.2), enemy_fire=1.2, damage_scale=1.4,
-            bombs=9, breakers=3, lives=8),
+            enemy_speed=(9.2, 10.3), enemy_fire=1.2, damage_scale=1.4,
+            bombs=9, breakers=3, lives=8, catchup=0.45, enemy_lives=7, elev=1.30),
 }
+
+# ---------------------------------------------------------------------------
+# Terrain elevation
+#
+# The landscape rolls: circuits climb and descend, and a steep enough drag
+# genuinely needs boost to hold speed up.  Each difficulty scales the amplitude
+# via its `elev` factor.
+# ---------------------------------------------------------------------------
+ELEV_BASE_AMP = 130.0          # peak hill height at elev == 1.0
+ELEV_WAVELEN = (2600.0, 4600.0)   # world units per hill (long = gentle sweeps)
+# Gradient handling. A climb SHIFTS YOU DOWN A GEAR rather than scaling your
+# speed: boosting uphill only nets normal pace, and normal pace drops to a
+# crawl. A descent shifts you up a gear the same way. Bounding it to the speed
+# tiers is what stops steep sections turning into a dead stop.
+GRADE_STEEP = 0.28             # slope at which the full one-gear shift applies
+GRADE_PITCH_K = 0.9            # how much of the slope shows as body pitch
+ENEMY_GRADE_UP = 0.70          # rival speed kept on a full climb
+ENEMY_GRADE_DOWN = 1.15        # rival speed on a full descent
+
+# Ground mesh. GROUND_TILE must stay small next to ELEV_WAVELEN or the flat
+# quads bulge above the curved terrain and the grass pokes through the road.
+ROAD_TESS = 110.0              # road surface subdivision along a straight;
+                              # must be fine enough to hug the rolling terrain
+GROUND_TILE = 130.0
+GROUND_DROP = 10.0              # grass sits this far below the road surface
+
+# Bridge / lake basin
+BRIDGE_DEPTH = 150.0           # how far the ground scoops below the road deck
 
 # Generator guard-rails (unscaled layout units)
 GEN_MIN_EDGE = 1150.0          # shortest allowed straight between corners
@@ -124,6 +152,20 @@ ENEMY_CORNER_SLOWDOWN = 0.5    # fraction of speed kept mid-corner
 ENEMY_RAGE_TIME = 3.0          # seconds the surge lasts after a wall bump
 ENEMY_RAGE_FACTOR = 1.5        # speed multiplier during the surge
 
+# Rival roles -- each race fields one of each, so the pack has a fast-but-frail
+# car, a tanky bully and a trigger-happy gunner instead of three clones.
+# (speed multiplier, bonus armour, fire-rate multiplier, ram damage)
+ENEMY_ROLES = (
+    dict(tag="SPR", name="Sprinter", speed=1.14, armor=-1, fire=1.4, ram=1),
+    dict(tag="BRU", name="Bruiser",  speed=0.93, armor=+2, fire=1.2, ram=2),
+    dict(tag="GUN", name="Gunner",   speed=1.02, armor=0,  fire=0.6, ram=1),
+)
+
+# Catch-up ("rubber band"): rivals dig in when the player pulls clear, so a
+# good lead never turns into a boring procession. Strength is per-difficulty.
+CATCHUP_START = 900.0          # lead (world units) before rivals respond
+CATCHUP_FULL = 3200.0          # lead at which the surge reaches full strength
+
 # ---------------------------------------------------------------------------
 # Camera
 # ---------------------------------------------------------------------------
@@ -138,6 +180,8 @@ CAM_LOOK_AHEAD = 40.0
 # Combat / hazards
 # ---------------------------------------------------------------------------
 GUN_TURN_SPEED = 5.0
+PLAYER_FIRE_COOLDOWN = 0.22    # rate-limits the gun so rapid taps can't spam
+                              # dozens of overlapping shot sounds
 BULLET_SPEED = 34.0
 BULLET_HIT_RADIUS = 55.0
 ENEMY_MAX_LIVES = 4
@@ -253,7 +297,7 @@ THEMES = {
         name="Desert Run",
         sky_top=(0.32, 0.52, 0.78), sky_horizon=(0.96, 0.86, 0.66),
         fog=(0.92, 0.84, 0.68), ground=(0.76, 0.66, 0.40),
-        road=(0.26, 0.24, 0.22), road_edge=(0.32, 0.30, 0.27),
+        road=(0.19, 0.18, 0.17), road_edge=(0.24, 0.23, 0.21),
         lane=(0.96, 0.94, 0.80),
         kerb_a=(0.20, 0.42, 0.80), kerb_b=(0.96, 0.96, 0.92),
         hill_low=(0.62, 0.48, 0.28), hill_high=(0.86, 0.76, 0.52),
@@ -286,7 +330,7 @@ THEMES = {
         name="Canyon Sunset",
         sky_top=(0.34, 0.20, 0.42), sky_horizon=(0.98, 0.60, 0.32),
         fog=(0.88, 0.62, 0.46), ground=(0.62, 0.36, 0.24),
-        road=(0.21, 0.17, 0.16), road_edge=(0.27, 0.22, 0.20),
+        road=(0.17, 0.15, 0.15), road_edge=(0.22, 0.19, 0.18),
         lane=(0.98, 0.90, 0.70),
         kerb_a=(0.80, 0.16, 0.18), kerb_b=(0.98, 0.92, 0.84),
         hill_low=(0.44, 0.22, 0.16), hill_high=(0.80, 0.50, 0.32),

@@ -119,7 +119,10 @@ def _make_music():
 
 
 def _make_shot(low=False):
-    """A short laser/gun 'pew' -- a fast downward pitch sweep plus a click."""
+    """A short gun 'pew': a fast downward pitch sweep plus a muzzle click.
+
+    Kept deliberately soft and short so rapid fire layers cleanly instead of
+    turning into a harsh, clipping buzz."""
     np = _np
     dur = 0.16
     n = int(_RATE * dur)
@@ -127,10 +130,11 @@ def _make_shot(low=False):
     f0, f1 = (520, 120) if low else (880, 220)
     freq = f0 * (f1 / f0) ** (t / dur)
     phase = 2 * np.pi * np.cumsum(freq) / _RATE
-    sig = np.sin(phase) + 0.4 * np.sign(np.sin(phase))     # squareish body
-    sig += 0.3 * _noise(n) * np.exp(-t * 60)               # muzzle click
-    sig *= _env(n, 0.002, dur * 0.8)
-    return _to_sound(sig, 0.45)
+    sig = np.sin(phase) + 0.22 * np.sign(np.sin(phase))    # gentle square edge
+    sig += 0.22 * _lowpass(_noise(n), 0.5) * np.exp(-t * 70)   # muzzle click
+    sig *= _env(n, 0.004, dur * 0.85)
+    sig /= np.max(np.abs(sig)) + 1e-6                      # normalise, no clip
+    return _to_sound(sig, 0.34)
 
 
 def _make_crash():
@@ -233,7 +237,12 @@ def init():
         import pygame
         pygame.mixer.pre_init(_RATE, -16, 2, 512)
         pygame.mixer.init()
-        pygame.mixer.set_num_channels(24)
+        pygame.mixer.set_num_channels(32)
+        # Reserve 0..2 for the music / engine / boost loops. Without this,
+        # play()'s find_channel(force=True) steals the LONGEST-playing channel
+        # -- which is always one of those loops -- so every gunshot chopped the
+        # music and engine out. Reserved channels are never handed out.
+        pygame.mixer.set_reserved(3)
     except Exception:
         _enabled = False
         return

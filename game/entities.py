@@ -184,6 +184,11 @@ class Enemy:
         self.jump_start = 0.0
         self.slow_until = 0.0
         self.rage_until = 0.0        # temporary speed surge (player hit a rail)
+        self.catchup = 1.0           # rubber-band multiplier when trailing
+        self.role = None             # sprinter / bruiser / gunner
+        self.tag = "E"               # short label for the HUD
+        self.ram = 1                 # damage this rival deals by ramming
+        self.grade_factor = 1.0      # gradient penalty/bonus set by the engine
         self.bank = 0.0              # current body roll (smoothed, degrees)
         self.gun_angle = 0.0         # turret heading relative to body forward
         self.fire_cd = 0.0           # next time this rival may shoot
@@ -245,6 +250,9 @@ class Enemy:
             spd *= 0.45
         if now < self.rage_until:                 # surge after a player rail bump
             spd *= C.ENEMY_RAGE_FACTOR
+        spd *= self.catchup                       # rubber-band when trailing
+        # climbing a hill costs a rival speed too -- they need the gradient
+        spd *= self.grade_factor
         a = math.radians(self.angle)
         self.pos[0] += spd * fs * math.cos(a)
         self.pos[1] += spd * fs * math.sin(a)

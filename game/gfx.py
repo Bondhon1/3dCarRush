@@ -327,16 +327,59 @@ def _cloud(cx, cy, r):
                 (1.0, 1.0, 1.0, 0.16), (1.0, 1.0, 1.0, 0.0))
 
 
-def draw_ground(size=8000 * C.TRACK_SCALE, tile=500.0):
+_ground_list = None
+
+
+def reset_ground_cache():
+    """Drop the baked ground mesh (call when the terrain or theme changes)."""
+    global _ground_list
+    if _ground_list is not None:
+        try:
+            glDeleteLists(_ground_list, 1)
+        except Exception:
+            pass
+        _ground_list = None
+
+
+def draw_ground(size=8000 * C.TRACK_SCALE, tile=None, height=None):
+    """Baked terrain mesh.
+
+    IMPORTANT: the tiles must be small relative to the hill wavelength.  A
+    coarse mesh interpolates each quad as a flat chord across a curved hill,
+    which can bulge tens of units ABOVE the true surface -- enough for the
+    grass to poke up through the road.  Fine tiles keep that error well under
+    GROUND_DROP, and baking into a display list makes the extra geometry free.
+    """
+    global _ground_list
+    if _ground_list is None:
+        _ground_list = glGenLists(1)
+        glNewList(_ground_list, GL_COMPILE)
+        _emit_ground(size, tile or C.GROUND_TILE, height)
+        glEndList()
+    glCallList(_ground_list)
+
+
+def _emit_ground(size, tile, height):
     """A large lit grass plane with a subtle checker so motion reads clearly.
 
     ``size`` follows TRACK_SCALE so the grass always extends past the enlarged
     circuit (no void under distant road); the checker keeps a constant tile
-    size so its density looks the same at any scale."""
-    glNormal3f(0, 0, 1)
-    step = tile
+    size so its density looks the same at any scale.  ``height`` is the track's
+    terrain function -- passing it rolls the grass with the hills so the road
+    never floats above or sinks into flat ground."""
     g1 = C.T('ground')
     g2 = tuple(min(1.0, c + 0.05) for c in g1)
+    h = height or (lambda x, y: 0.0)
+    step = tile
+
+    def vert(vx, vy):
+        # normal from the local gradient so the hills actually catch the light
+        nx = (h(vx + 40, vy) - h(vx - 40, vy)) / 80.0
+        ny = (h(vx, vy + 40) - h(vx, vy - 40)) / 80.0
+        nl = math.sqrt(nx * nx + ny * ny + 1.0)
+        glNormal3f(-nx / nl, -ny / nl, 1.0 / nl)
+        glVertex3f(vx, vy, h(vx, vy) - C.GROUND_DROP)
+
     y = -size
     row = 0
     glBegin(GL_QUADS)
@@ -345,10 +388,10 @@ def draw_ground(size=8000 * C.TRACK_SCALE, tile=500.0):
         col = row
         while x < size:
             glColor3f(*(g1 if (col + row) % 2 == 0 else g2))
-            glVertex3f(x, y, -0.5)
-            glVertex3f(x + step, y, -0.5)
-            glVertex3f(x + step, y + step, -0.5)
-            glVertex3f(x, y + step, -0.5)
+            vert(x, y)
+            vert(x + step, y)
+            vert(x + step, y + step)
+            vert(x, y + step)
             x += step
             col += 1
         y += step

@@ -56,6 +56,10 @@ class Game:
         self.checkpoint_reached = False
         self.breaker_cd = 0.0
         self.pothole_cd = 0.0          # one slowdown per pothole strike
+        self.fire_cd = 0.0             # player gun rate limit
+        self._catchup_at = 0.0         # next rubber-band recompute
+        self._catchup_msg = 0.0        # rate-limit the "closing in" warning
+        self.difficulty = 3
         # held-key movement state
         self.brake = False
         self.turn_left = False
@@ -79,9 +83,12 @@ class Game:
         C.set_theme(random.randint(1, len(C.THEMES)))
         gfx.apply_theme()
         props.reset_hill_cache()
+        gfx.reset_ground_cache()
         self.track.dispose()
         self.track.build(difficulty)
-        self.player.reset(pos=self.track.start_pos,
+        sx, sy = self.track.start_pos
+        self.player.reset(pos=(sx, sy,
+                               self.track.height_at(sx, sy) + C.CAR_GROUND_Z),
                           angle=self.track.start_angle,
                           lives=d['lives'])
         self._spawn_enemies(difficulty)
@@ -124,6 +131,8 @@ class Game:
         sa = math.radians(self.track.start_angle)
         fwd = (math.cos(sa), math.sin(sa))
         right = (fwd[1], -fwd[0])
+        roles = list(C.ENEMY_ROLES)      # one of each role, in random slots
+        random.shuffle(roles)
         for i, off in enumerate((-70, 0, 70)):
             path = []
             for j, (x, y, z) in enumerate(base):
@@ -132,14 +141,18 @@ class Game:
                 dl = math.hypot(dx, dy) or 1.0
                 px, py = dy / dl, -dx / dl       # local perpendicular
                 path.append((x + px * off, y + py * off, z))
-            e = Enemy(path, random.uniform(*d['enemy_speed']))
-            e.fire_gap = d['enemy_fire']
+            role = roles[i]
+            e = Enemy(path, random.uniform(*d['enemy_speed']) * role['speed'])
+            e.role, e.tag, e.ram = role['name'], role['tag'], role['ram']
+            e.lives = max(1, d['enemy_lives'] + role['armor'])
+            e.max_lives = e.lives
+            e.fire_gap = d['enemy_fire'] * role['fire']
             # grid slots: staggered behind the start line, across the road
             lane = (-140, 150, -30)[i]
             back = (-90, -90, -230)[i]
-            e.pos = [sx + right[0] * lane + fwd[0] * back,
-                     sy + right[1] * lane + fwd[1] * back,
-                     C.CAR_GROUND_Z]
+            ex = sx + right[0] * lane + fwd[0] * back
+            ey = sy + right[1] * lane + fwd[1] * back
+            e.pos = [ex, ey, self.track.height_at(ex, ey) + C.CAR_GROUND_Z]
             e.angle = self.track.start_angle
             self.enemies.append(e)
 
@@ -302,6 +315,21 @@ class Game:
             target_speed = C.NORMAL_SPEED
         if now < p.pothole_until:            # bogged down in broken tarmac
             target_speed *= C.POTHOLE_SLOW_FACTOR
+        # Gradient shifts you a whole gear rather than scaling your speed:
+        # uphill a boost only buys you normal pace and normal pace drops to a
+        # crawl; downhill does the same in reverse. Blending between the speed
+        # tiers keeps a steep climb slow but never a dead stop.
+        ha = math.radians(p.angle)
+        self.grade = self.track.slope_along(p.pos[0], p.pos[1],
+                                            math.cos(ha), math.sin(ha))
+        tiers = (C.SLOW_SPEED * 0.7, C.SLOW_SPEED, C.NORMAL_SPEED,
+                 C.BOOST_SPEED, C.BOOST_SPEED * 1.18)
+        gear = 3 if p.boost_active else (1 if self.brake else 2)
+        g = max(-1.0, min(1.0, self.grade / C.GRADE_STEEP))
+        if g > 0:                                  # climbing -> down a gear
+            target_speed += (tiers[gear - 1] - target_speed) * g
+        elif g < 0:                                # descending -> up a gear
+            target_speed += (tiers[gear + 1] - target_speed) * (-g)
         p.speed += (target_speed - p.speed) * min(1.0, C.SPEED_LERP * fs)
 
         # engine note tracks throttle; boost adds a whoosh
@@ -330,10 +358,14 @@ class Game:
                     if p.lives <= 0:
                         self._lose()
 
+        self._update_catchup(now)
+
         # enemies
         for e in self.enemies:
             if e.lives <= 0:
                 e.respawn()
+                e.pos[2] = (self.track.height_at(e.pos[0], e.pos[1])
+                            + C.CAR_GROUND_Z)
             e.update(fs)
             # rivals track and shoot the player when tailgated too closely
             shot = e.aim_and_maybe_fire(p, now)
@@ -368,6 +400,30 @@ class Game:
         audio.stop_engine()
         audio.set_boost(False)
 
+    def _update_catchup(self, now):
+        """Rubber-band the pack: rivals dig in when the player pulls clear.
+
+        Recomputed a few times a second (lap progress is a polyline projection,
+        so it isn't worth doing every frame)."""
+        if now < self._catchup_at:
+            return
+        self._catchup_at = now + 0.25
+        strength = C.DIFFICULTIES[getattr(self, 'difficulty', 3)]['catchup']
+        pp = self._lap_progress(self.player.pos[0], self.player.pos[1])
+        surging = False
+        for e in self.enemies:
+            lead = pp - self._lap_progress(e.pos[0], e.pos[1])
+            if lead > C.CATCHUP_START:
+                t = min(1.0, (lead - C.CATCHUP_START) /
+                        (C.CATCHUP_FULL - C.CATCHUP_START))
+                e.catchup = 1.0 + t * strength
+                surging = surging or t > 0.4
+            else:
+                e.catchup = 1.0
+        if surging and now >= self._catchup_msg:
+            self._catchup_msg = now + 9.0
+            self.flash("RIVALS CLOSING IN", 1.4)
+
     def _update_body(self, now, fs):
         """Settle the car's height and pitch onto whatever it's driving over.
 
@@ -377,8 +433,12 @@ class Game:
         top.  Everything is eased so the motion reads as suspension travel."""
         p = self.player
         bump_pitch, bump_drop = p.bump_offset(now)
+        terrain = self.track.height_at(p.pos[0], p.pos[1])
+        # lie along the hillside as well as any hump
+        grade_pitch = -math.degrees(math.atan(getattr(self, 'grade', 0.0))) \
+            * C.GRADE_PITCH_K
         if p.jump_active:
-            p.pitch += (bump_pitch - p.pitch) * min(1.0, 0.3 * fs)
+            p.pitch += ((bump_pitch + grade_pitch) - p.pitch) * min(1.0, 0.3 * fs)
             return
         ride_z, ride_pitch = 0.0, 0.0
         for br in self.track.speed_breakers:
@@ -387,9 +447,10 @@ class Game:
                 ride_z = z
                 ride_pitch = props.breaker_pitch(br, p.pos[0], p.pos[1])
                 break
-        target_z = C.CAR_GROUND_Z + ride_z + bump_drop
+        target_z = terrain + C.CAR_GROUND_Z + ride_z + bump_drop
         p.pos[2] += (target_z - p.pos[2]) * min(1.0, 0.35 * fs)
-        p.pitch += ((ride_pitch + bump_pitch) - p.pitch) * min(1.0, 0.3 * fs)
+        p.pitch += ((ride_pitch + bump_pitch + grade_pitch) - p.pitch) \
+            * min(1.0, 0.3 * fs)
 
     def _update_jump(self, now):
         p = self.player
@@ -399,13 +460,17 @@ class Game:
         if t >= C.JUMP_DURATION:
             p.jump_active = False
             p.jump_mode = None
-            p.pos[2] = C.CAR_GROUND_Z
+            p.pos[2] = (self.track.height_at(p.pos[0], p.pos[1])
+                        + C.CAR_GROUND_Z)
         else:
             if p.jump_mode == "hit":
-                p.pos[2] = C.CAR_GROUND_Z + 8
+                p.pos[2] = (self.track.height_at(p.pos[0], p.pos[1])
+                            + C.CAR_GROUND_Z + 8)
             else:
                 prog = t / C.JUMP_DURATION
-                p.pos[2] = C.CAR_GROUND_Z + 4 * C.JUMP_HEIGHT_MAX * prog * (1 - prog)
+                p.pos[2] = (self.track.height_at(p.pos[0], p.pos[1])
+                            + C.CAR_GROUND_Z
+                            + 4 * C.JUMP_HEIGHT_MAX * prog * (1 - prog))
 
     def _car_hits_wall(self, x, y, angle):
         a = math.radians(angle)
@@ -434,7 +499,7 @@ class Game:
                 e.pos[0] -= dx / d * nudge
                 e.pos[1] -= dy / d * nudge
                 if not p.shield_active and now >= self.bump_cd:
-                    p.lives = max(0, p.lives - 1)
+                    p.lives = max(0, p.lives - e.ram)   # bruisers hit harder
                     self.bump_cd = now + 1.0
                     audio.play('crash', 0.55)
                     if p.lives <= 0:
@@ -454,6 +519,17 @@ class Game:
                     nx, ny = dx / d, dy / d
                     a.pos[0] -= nx * push; a.pos[1] -= ny * push
                     b.pos[0] += nx * push; b.pos[1] += ny * push
+        # rivals feel the gradient and sit on the hillside just like the player
+        for e in E:
+            ea = math.radians(e.angle)
+            g = self.track.slope_along(e.pos[0], e.pos[1],
+                                       math.cos(ea), math.sin(ea))
+            gg = max(-1.0, min(1.0, g / C.GRADE_STEEP))
+            e.grade_factor = (1.0 + gg * (C.ENEMY_GRADE_UP - 1.0) if gg > 0
+                              else 1.0 - gg * (C.ENEMY_GRADE_DOWN - 1.0))
+            if not e.jump_active:
+                e.pos[2] = self.track.height_at(e.pos[0], e.pos[1]) + C.CAR_GROUND_Z
+
         # speed-breaker jumps (so rivals arc over the hump instead of clipping)
         for e in E:
             if not e.jump_active:
@@ -466,10 +542,13 @@ class Game:
                 t = now - e.jump_start
                 if t >= C.JUMP_DURATION:
                     e.jump_active = False
-                    e.pos[2] = C.CAR_GROUND_Z
+                    e.pos[2] = (self.track.height_at(e.pos[0], e.pos[1])
+                                + C.CAR_GROUND_Z)
                 else:
                     prog = t / C.JUMP_DURATION
-                    e.pos[2] = C.CAR_GROUND_Z + 4 * C.JUMP_HEIGHT_MAX * prog * (1 - prog)
+                    e.pos[2] = (self.track.height_at(e.pos[0], e.pos[1])
+                                + C.CAR_GROUND_Z
+                                + 4 * C.JUMP_HEIGHT_MAX * prog * (1 - prog))
 
     def _pickup_and_hazards(self, now):
         p = self.player
@@ -531,17 +610,23 @@ class Game:
                 # taken gently you simply ride up and over it -- the ride-over
                 # is handled every frame in _update_breaker_ride().
                 if p.speed >= C.NORMAL_SPEED * C.BREAKER_FAST_LAUNCH:
+                    # The faster you hit it the worse it hurts -- taking a hump
+                    # at full boost wrecks the car, not just your momentum.
+                    flat_out = p.speed >= C.BOOST_SPEED * 0.9
+                    damage = C.BREAKER_FAST_DAMAGE * (2 if flat_out else 1)
                     p.jump_active = True
                     p.jump_start = now
                     p.jump_mode = "jump"
                     self.breaker_cd = now + 1.2
                     p.boost_active = False        # kills a boost; slows you
-                    p.speed = C.NORMAL_SPEED * 0.8
-                    audio.play('crash', 0.6)
+                    p.boost_cd_until = now + C.BOOST_COOLDOWN
+                    p.speed = C.NORMAL_SPEED * 0.55
+                    p.bump_start = now            # heavy landing jolt
+                    audio.play('crash', 0.8)
                     if not p.shield_active:
-                        p.lives = max(0, p.lives - C.BREAKER_FAST_DAMAGE)
-                        self.explosions.append(props.Explosion(px, py, 0.5))
-                        self.flash("SPEED BREAKER!", 1.2)
+                        p.lives = max(0, p.lives - damage)
+                        self.explosions.append(props.Explosion(px, py, 0.6))
+                        self.flash("SPEED BREAKER! -%d ARMOR" % damage, 1.4)
                         if p.lives <= 0:
                             self._lose()
                 break
@@ -620,6 +705,10 @@ class Game:
     def fire(self):
         if self.state != PLAYING:
             return
+        now = time.time()
+        if now < self.fire_cd:          # rate-limited: keeps the gun audible
+            return
+        self.fire_cd = now + C.PLAYER_FIRE_COOLDOWN
         p = self.player
         a = math.radians(p.bullet_angle())
         self.bullets.append(Bullet(p.pos[0] + C.CAR_LENGTH / 2 * math.cos(a),
@@ -630,30 +719,44 @@ class Game:
     # ------------------------------------------------------------------ render
     def draw_world(self):
         gfx.place_lights()
-        gfx.draw_ground()
+        gfx.draw_ground(height=self.track.ground_height_at)
         # distant scenery first (hills sit on the horizon, lakes on the ground)
-        for (hx, hy, r, h) in self.hills:
-            props.draw_hill(hx, hy, r, h)
+        H = self.track.ground_height_at      # landscape
+        RH = self.track.height_at            # road surface
+        for (hx, hy, r, hh) in self.hills:
+            props.draw_hill(hx, hy, r, hh, base_z=H(hx, hy))
         for (lx, ly, rx, ry) in self.lakes:
-            props.draw_lake(lx, ly, rx, ry)
+            props.draw_lake(lx, ly, rx, ry, base_z=H(lx, ly))
+        if self.track.bridge:
+            bx, by, ba, blen = self.track.bridge
+            deck = self.track.height_at(bx, by)
+            water = deck - self.track.bowl[3] * 0.72
+            props.draw_lake(bx, by, self.track.bowl[2] * 0.92,
+                            self.track.bowl[2] * 0.92, base_z=water)
+            props.draw_bridge(bx, by, ba, blen, deck, water)
         self.track.draw()
         for (rx, ry, rs, ra) in self.rocks:
-            props.draw_rock(rx, ry, rs, ra)
+            props.draw_rock(rx, ry, rs, ra, base_z=H(rx, ry))
         for (tx, ty, ts) in self.trees:
-            props.draw_tree(tx, ty, ts)
+            props.draw_tree(tx, ty, ts, base_z=H(tx, ty))
         for (sx, sy, w, d, ang) in self.track.speed_breakers:
-            props.draw_speed_breaker(sx, sy, w, d, ang)
+            props.draw_speed_breaker(sx, sy, w, d, ang, base_z=RH(sx, sy))
+        # pickups and hazards live ON THE ROAD -> road height, so they float
+        # correctly above the tarmac instead of sinking into the hillside
         for (hx, hy) in self.health_kits:
-            props.draw_health_kit(hx, hy)
+            props.draw_health_kit(hx, hy, base_z=RH(hx, hy))
         for (sx, sy) in self.shield_kits:
-            props.draw_shield_kit(sx, sy)
+            props.draw_shield_kit(sx, sy, base_z=RH(sx, sy))
         for (bx, by) in self.bombs:
-            props.draw_bomb(bx, by)
+            props.draw_bomb(bx, by, base_z=RH(bx, by))
         draw_bullets(self.bullets)
         # ground shadows first so cars sit on top of them
-        props.draw_car_shadow(self.player.pos, self.player.angle)
+        # cars sit on the ROAD, so their shadows use the road height (on the
+        # bridge that keeps them on the deck rather than down on the water)
+        props.draw_car_shadow(self.player.pos, self.player.angle,
+                              base_z=RH(self.player.pos[0], self.player.pos[1]))
         for e in self.enemies:
-            props.draw_car_shadow(e.pos, e.angle)
+            props.draw_car_shadow(e.pos, e.angle, base_z=RH(e.pos[0], e.pos[1]))
         self.player.draw()
         if self.player.boost_active:
             props.draw_boost_flames(self.player.pos, self.player.angle)

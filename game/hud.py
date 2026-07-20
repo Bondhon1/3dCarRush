@@ -49,9 +49,13 @@ def draw_dashboard(g):
     gfx.text_small(x0 + 18, y1 - 126, "RIVALS", C.COL_HUD_DIM)
     ry = y1 - 146
     for i, e in enumerate(g.enemies):
-        gfx.text_small(x0 + 18, ry - i * 18, f"E{i+1}", (0.95, 0.55, 0.5))
-        _pips(x0 + 56, ry - 6 - i * 18, C.ENEMY_MAX_LIVES,
-              max(0, e.lives), C.COL_HUD_BAD, size=11, gap=4)
+        # show each rival's role -- the pack is a sprinter, a bruiser and a
+        # gunner, and knowing which is which changes how you race them
+        chasing = getattr(e, 'catchup', 1.0) > 1.02
+        col = C.COL_HUD_WARN if chasing else (0.95, 0.55, 0.5)
+        gfx.text_small(x0 + 18, ry - i * 18, getattr(e, 'tag', f"E{i+1}"), col)
+        _pips(x0 + 62, ry - 6 - i * 18, getattr(e, 'max_lives', C.ENEMY_MAX_LIVES),
+              max(0, e.lives), C.COL_HUD_BAD, size=9, gap=3)
 
     # transient flash message
     if g.message and time.time() < g.message_until:

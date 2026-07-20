@@ -17,8 +17,8 @@ def _bob(period=1.6, amp=6.0, phase=0.0):
 # ---------------------------------------------------------------------------
 # Health kit -- a floating red cross
 # ---------------------------------------------------------------------------
-def draw_health_kit(x, y):
-    z = 26 + _bob(phase=x * 0.01)
+def draw_health_kit(x, y, base_z=0.0):
+    z = base_z + 26 + _bob(phase=x * 0.01)
     glPushMatrix()
     glTranslatef(x, y, z)
     glRotatef((time.time() * 40) % 360, 0, 0, 1)
@@ -33,8 +33,8 @@ def draw_health_kit(x, y):
 # ---------------------------------------------------------------------------
 # Shield kit -- a spinning cyan diamond
 # ---------------------------------------------------------------------------
-def draw_shield_kit(x, y):
-    z = 30 + _bob(phase=y * 0.01)
+def draw_shield_kit(x, y, base_z=0.0):
+    z = base_z + 30 + _bob(phase=y * 0.01)
     glPushMatrix()
     glTranslatef(x, y, z)
     glRotatef((time.time() * 70) % 360, 0, 0, 1)
@@ -63,11 +63,11 @@ def _octahedron(s):
 # ---------------------------------------------------------------------------
 # Bomb -- a pulsing dark sphere with a fuse
 # ---------------------------------------------------------------------------
-def draw_bomb(x, y):
+def draw_bomb(x, y, base_z=0.0):
     pulse = 1.0 + 0.1 * math.sin(time.time() * 5)
     size = 18 * pulse
     glPushMatrix()
-    glTranslatef(x, y, size * 0.9)
+    glTranslatef(x, y, base_z + size * 0.9)
     glColor3f(0.12, 0.12, 0.14)
     gfx.sphere(size, 18, 14)
     glColor3f(0.4, 0.25, 0.1)
@@ -163,11 +163,11 @@ def breaker_pitch(br, x, y):
 
 
 def draw_speed_breaker(x, y, width=C.BREAKER_WIDTH, depth=C.BREAKER_DEPTH,
-                       angle=0.0, height=C.BREAKER_HEIGHT):
+                       angle=0.0, base_z=0.0, height=C.BREAKER_HEIGHT):
     """A proper road hump: a smooth rounded ridge banded with hazard stripes
     running across the road, with closed ends and a grounded rubber skirt."""
     glPushMatrix()
-    glTranslatef(x, y, 0)
+    glTranslatef(x, y, base_z)
     glRotatef(angle, 0, 0, 1)          # local +X = travel, +Y = across the road
     segs, stripes = 18, 10
 
@@ -217,11 +217,11 @@ def draw_speed_breaker(x, y, width=C.BREAKER_WIDTH, depth=C.BREAKER_DEPTH,
 # ---------------------------------------------------------------------------
 # Ground shadow blob beneath a car
 # ---------------------------------------------------------------------------
-def draw_car_shadow(pos, angle):
+def draw_car_shadow(pos, angle, base_z=0.0):
     gfx.lighting(False)
     glDepthMask(GL_FALSE)                 # don't let the shadow occlude itself
     glPushMatrix()
-    glTranslatef(pos[0], pos[1], 0.3)
+    glTranslatef(pos[0], pos[1], base_z + 0.3)
     glRotatef(angle, 0, 0, 1)
     hl = C.CAR_LENGTH * 0.62
     hw = C.CAR_WIDTH * 0.72
@@ -266,9 +266,9 @@ def draw_boost_flames(pos, angle):
 # ---------------------------------------------------------------------------
 # Tree -- lit trunk + stacked cones
 # ---------------------------------------------------------------------------
-def draw_tree(x, y, scale=1.0):
+def draw_tree(x, y, scale=1.0, base_z=0.0):
     glPushMatrix()
-    glTranslatef(x, y, 0)
+    glTranslatef(x, y, base_z)
     glScalef(scale, scale, scale)
     glColor3f(0.45, 0.28, 0.12)
     gfx.capped_cylinder(9, 58, 10)
@@ -285,9 +285,9 @@ def draw_tree(x, y, scale=1.0):
 # ---------------------------------------------------------------------------
 # Rock -- a low lit boulder (irregular squashed sphere)
 # ---------------------------------------------------------------------------
-def draw_rock(x, y, scale=1.0, rot=0.0):
+def draw_rock(x, y, scale=1.0, rot=0.0, base_z=0.0):
     glPushMatrix()
-    glTranslatef(x, y, 0)
+    glTranslatef(x, y, base_z)
     glRotatef(rot, 0, 0, 1)
     glScalef(30 * scale, 22 * scale, 16 * scale)
     glColor3f(*C.COL_ROCK)
@@ -409,7 +409,7 @@ def _build_hill_list(seed):
     return lid
 
 
-def draw_hill(x, y, radius, height):
+def draw_hill(x, y, radius, height, base_z=0.0):
     seed = (int(x) * 73856093) ^ (int(y) * 19349663)
     key = seed % _HILL_SEEDS
     lid = _HILL_LISTS.get(key)
@@ -417,7 +417,7 @@ def draw_hill(x, y, radius, height):
         lid = _build_hill_list(key + 1)
         _HILL_LISTS[key] = lid
     glPushMatrix()
-    glTranslatef(x, y, -8)                  # tuck the foot slightly into ground
+    glTranslatef(x, y, base_z - 8)          # tuck the foot slightly into ground
     glScalef(radius, radius, height)
     glCallList(lid)
     glPopMatrix()
@@ -426,9 +426,9 @@ def draw_hill(x, y, radius, height):
 # ---------------------------------------------------------------------------
 # Lake -- a flat translucent water disc with a rim, gently shimmering
 # ---------------------------------------------------------------------------
-def draw_lake(x, y, rx, ry):
+def draw_lake(x, y, rx, ry, base_z=0.0):
     glPushMatrix()
-    glTranslatef(x, y, 1.0)
+    glTranslatef(x, y, base_z + 1.0)
     glScalef(rx, ry, 1.0)
     glNormal3f(0, 0, 1)
     shimmer = 0.5 + 0.5 * math.sin(time.time() * 0.8)
@@ -454,3 +454,49 @@ def _flat_disc(r, z=0.0, seg=40):
         a = 2 * math.pi * i / seg
         glVertex3f(r * math.cos(a), r * math.sin(a), z)
     glEnd()
+
+
+# ---------------------------------------------------------------------------
+# Bridge -- railings + pillars where the road spans the lake basin
+# ---------------------------------------------------------------------------
+def draw_bridge(x, y, angle, length, deck_z, water_z, width=C.ROAD_WIDTH):
+    """Side railings along the deck and stone pillars down into the water."""
+    glPushMatrix()
+    glTranslatef(x, y, 0)
+    glRotatef(angle, 0, 0, 1)        # local +X runs along the road
+    hw = width / 2
+    hl = length / 2
+
+    # railings down both edges
+    posts = max(4, int(length / 90))
+    for side in (-1, 1):
+        sy = side * (hw + 6)
+        glColor3f(0.72, 0.72, 0.76)
+        for i in range(posts + 1):
+            px = -hl + length * i / posts
+            glPushMatrix()
+            glTranslatef(px, sy, deck_z)
+            gfx.box(5, 5, 26)
+            glPopMatrix()
+        glColor3f(0.86, 0.86, 0.90)   # top rail
+        glPushMatrix()
+        glTranslatef(0, sy, deck_z + 26)
+        gfx.box(hl, 7, 5)
+        glPopMatrix()
+
+    # pillars into the water
+    glColor3f(0.46, 0.45, 0.44)
+    drop = max(20.0, deck_z - water_z)
+    for px in (-hl * 0.55, hl * 0.55):
+        for py in (-hw * 0.6, hw * 0.6):
+            glPushMatrix()
+            glTranslatef(px, py, water_z - 10)
+            gfx.capped_cylinder(22, drop + 12, slices=10)
+            glPopMatrix()
+    # deck underside so the span reads as solid from below
+    glColor3f(0.30, 0.30, 0.33)
+    glPushMatrix()
+    glTranslatef(0, 0, deck_z - 9)
+    gfx.box(hl, hw, 7)
+    glPopMatrix()
+    glPopMatrix()
