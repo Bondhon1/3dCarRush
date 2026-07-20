@@ -36,6 +36,7 @@ class Game:
         self.height = C.WINDOW_HEIGHT
         self.state = MENU
         self.menu_index = 0            # selected track on the start screen
+        self.menu_cards = []           # per-frame click hit-rects for the menu
         self.fpv = False
         self.track = track_mod.Track()
         self.player = Player()
@@ -709,6 +710,9 @@ class Game:
         protected = now < self.spawn_protect_until
         for b in list(self.bullets):
             b.advance(fs)
+            # ride a constant height above the road so the bolt follows hills and
+            # curves instead of diving into the tarmac on elevated sections
+            b.z = self.track.height_at(b.x, b.y) + C.BULLET_FLY_HEIGHT
             if b.team == "player":
                 hit = None
                 for e in self.enemies:
@@ -784,7 +788,8 @@ class Game:
         a = math.radians(p.bullet_angle())
         self.bullets.append(Bullet(p.pos[0] + C.CAR_LENGTH / 2 * math.cos(a),
                                    p.pos[1] + C.CAR_LENGTH / 2 * math.sin(a),
-                                   30, p.bullet_angle(), team="player"))
+                                   p.pos[2] + C.GUN_MUZZLE_Z,
+                                   p.bullet_angle(), team="player"))
         audio.play('shot', 0.6)
 
     # ------------------------------------------------------------------ render
@@ -983,6 +988,12 @@ def _mouse(button, state, x, y):
     g = APP
     if button == GLUT_LEFT_BUTTON and state == GLUT_DOWN:
         if g.state == MENU:
+            # GLUT gives y top-down; the HUD lays cards out bottom-up.
+            hy = g.height - y
+            for idx, x0, y0, x1, y1 in getattr(g, 'menu_cards', []):
+                if x0 <= x <= x1 and y0 <= hy <= y1:
+                    g.menu_index = idx        # click the card you actually want
+                    break
             g.start_race(g.menu_index + 1)
         else:
             g.fire()

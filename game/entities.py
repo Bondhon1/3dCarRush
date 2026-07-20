@@ -359,7 +359,8 @@ class Enemy:
             a = math.radians(self.angle + self.gun_angle)
             return Bullet(self.pos[0] + C.CAR_LENGTH / 2 * math.cos(a),
                           self.pos[1] + C.CAR_LENGTH / 2 * math.sin(a),
-                          28, self.angle + self.gun_angle, team="enemy")
+                          self.pos[2] + C.GUN_MUZZLE_Z,
+                          self.angle + self.gun_angle, team="enemy")
         return None
 
     def respawn(self):

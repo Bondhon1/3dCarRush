@@ -46,7 +46,10 @@ def draw_dashboard(g):
     gfx.text_small(x1 - 96, y1 - 84, f"of {total}", C.COL_HUD_DIM)
 
     # Rival standings (roomy vertical list)
-    gfx.text_small(x0 + 18, y1 - 126, "RIVALS", C.COL_HUD_DIM)
+    # [DEBUG] confirm the running game reflects config.py: show difficulty +
+    # each rival's actual spawned speed. Remove this block once verified.
+    dname = C.DIFFICULTIES.get(getattr(g, 'difficulty', 3), {}).get('name', '?')
+    gfx.text_small(x0 + 18, y1 - 126, f"RIVALS  [{dname}]", C.COL_HUD_DIM)
     ry = y1 - 146
     for i, e in enumerate(g.enemies):
         # show each rival's role -- the pack is a sprinter, a bruiser and a
@@ -56,6 +59,8 @@ def draw_dashboard(g):
         gfx.text_small(x0 + 18, ry - i * 18, getattr(e, 'tag', f"E{i+1}"), col)
         _pips(x0 + 62, ry - 6 - i * 18, getattr(e, 'max_lives', C.ENEMY_MAX_LIVES),
               max(0, e.lives), C.COL_HUD_BAD, size=9, gap=3)
+        gfx.text_small(x0 + 150, ry - i * 18,
+                       f"spd {getattr(e, 'speed', 0):.1f}", (0.6, 0.9, 1.0))
 
     # transient flash message
     if g.message and time.time() < g.message_until:
@@ -219,9 +224,11 @@ def draw_menu(g):
     cw, ch = 460, 52
     cx = g.width / 2
     top = sub_y - (ch + 22)         # `top` is the first card's lower edge
+    g.menu_cards = []               # click hit-rects, in HUD (bottom-up) space
     for i, name in enumerate(names):
         y = top - i * (ch + 12)
         x0, x1 = cx - cw / 2, cx + cw / 2
+        g.menu_cards.append((i, x0, y, x1, y + ch))
         sel = (i == g.menu_index)
         bg = (0.10, 0.30, 0.36, 0.92) if sel else (0.08, 0.10, 0.14, 0.85)
         gfx.rounded_rect(x0, y, x1, y + ch, 12, bg)
