@@ -35,28 +35,50 @@ NUM_LAYOUTS = 5                # menu entries (now DIFFICULTY levels, see below)
 # the five menu entries select how HARD that race is rather than which fixed
 # track you drive.  Each preset shapes the generated layout (corner count and
 # how irregular it is), the rivals, and how many hazards are strewn about.
+#
+# BALANCE CONTRACT.  The player's best sustainable pace is fixed by the boost
+# cycle: (3s @ 11.5 + 2.5s @ 6.6) / 5.5s  ~= 9.3.  Every preset keeps the
+# fastest rival's sustained pace (enemy_speed max x the Sprinter's x1.10)
+# UNDER that ceiling, so all five are winnable by a good enough driver.
+# Difficulty instead escalates the way pro racers do it:
+#   * corner_grip -- how much speed the AI carries through corners (skill),
+#   * enemy_fire / bombs / enemy_lives -- pressure and attrition,
+#   * catchup / slack -- the two ends of the rubber band.  `catchup` is how
+#     hard a trailing rival digs in; `slack` is how much a rival that broke
+#     away throttles back so the race stays in sight.  ROOKIE is springy in
+#     both directions (close, forgiving racing); INSANE barely lifts for you.
 # ---------------------------------------------------------------------------
 DIFFICULTIES = {
     1: dict(name="ROOKIE",  desc="Open, flowing circuit",
             corners=(6, 7),  size=3000, radius_var=(0.86, 1.14),
-            enemy_speed=(7.6, 8.5), enemy_fire=2.6, damage_scale=2.6,
-            bombs=6, breakers=1, lives=12, catchup=0.10, enemy_lives=3, elev=0.35),
+            enemy_speed=(5.9, 6.5), corner_grip=0.45, enemy_fire=2.8,
+            damage_scale=2.6, bombs=6, breakers=1, lives=12,
+            catchup=0.30, slack=0.35, enemy_lives=3, elev=0.35,
+            health_kits=4, shield_kits=2),
     2: dict(name="AMATEUR", desc="A few real corners",
             corners=(7, 8),  size=2900, radius_var=(0.82, 1.18),
-            enemy_speed=(7.9, 8.9), enemy_fire=2.2, damage_scale=2.2,
-            bombs=8, breakers=1, lives=11, catchup=0.18, enemy_lives=4, elev=0.60),
+            enemy_speed=(6.4, 7.0), corner_grip=0.50, enemy_fire=2.4,
+            damage_scale=2.2, bombs=8, breakers=1, lives=11,
+            catchup=0.30, slack=0.26, enemy_lives=4, elev=0.60,
+            health_kits=4, shield_kits=3),
     3: dict(name="PRO",     desc="Technical and quick",
             corners=(8, 10), size=2800, radius_var=(0.78, 1.22),
-            enemy_speed=(8.4, 9.4), enemy_fire=1.8, damage_scale=1.9,
-            bombs=12, breakers=2, lives=10, catchup=0.26, enemy_lives=5, elev=0.85),
+            enemy_speed=(6.9, 7.5), corner_grip=0.55, enemy_fire=2.0,
+            damage_scale=1.9, bombs=12, breakers=2, lives=10,
+            catchup=0.28, slack=0.18, enemy_lives=5, elev=0.85,
+            health_kits=5, shield_kits=3),
     4: dict(name="EXPERT",  desc="Tight, punishing line",
             corners=(9, 11), size=2750, radius_var=(0.74, 1.26),
-            enemy_speed=(8.9, 9.9), enemy_fire=1.5, damage_scale=1.6,
-            bombs=14, breakers=2, lives=9, catchup=0.34, enemy_lives=6, elev=1.05),
+            enemy_speed=(7.4, 8.1), corner_grip=0.60, enemy_fire=1.7,
+            damage_scale=1.6, bombs=14, breakers=2, lives=9,
+            catchup=0.26, slack=0.12, enemy_lives=6, elev=1.05,
+            health_kits=5, shield_kits=4),
     5: dict(name="INSANE",  desc="Relentless rivals",
             corners=(10, 13), size=2700, radius_var=(0.70, 1.30),
-            enemy_speed=(9.4, 10.4), enemy_fire=1.2, damage_scale=1.4,
-            bombs=18, breakers=3, lives=8, catchup=0.45, enemy_lives=7, elev=1.30),
+            enemy_speed=(7.9, 8.6), corner_grip=0.65, enemy_fire=1.4,
+            damage_scale=1.4, bombs=18, breakers=3, lives=8,
+            catchup=0.24, slack=0.07, enemy_lives=7, elev=1.30,
+            health_kits=6, shield_kits=4),
 }
 
 # ---------------------------------------------------------------------------
@@ -172,24 +194,41 @@ SPEED_CEILING = BOOST_SPEED * 1.35   # terminal velocity down a steep descent
 ENEMY_SPEED_MIN = 7.0
 ENEMY_SPEED_MAX = 8.4
 ENEMY_MAX_TURN = 4.6           # deg/frame cap -> smooth but corners are makeable
-ENEMY_CORNER_SLOWDOWN = 0.5    # fraction of speed kept mid-corner
+ENEMY_CORNER_SLOWDOWN = 0.5    # fallback corner grip (per-difficulty overrides)
 # Rubber-band punishment: clip a side rail and the rivals surge ahead for a bit.
 ENEMY_RAGE_TIME = 3.0          # seconds the surge lasts after a wall bump
 ENEMY_RAGE_FACTOR = 1.5        # speed multiplier during the surge
+# Hard ceiling on any rival's effective speed AFTER every multiplier (rage,
+# rubber band, roles, gradient).  Kept a hair under the player's boost so a
+# runaway rival can always, eventually, be run down.
+ENEMY_SPEED_CAP = BOOST_SPEED * 0.96
 
 # Rival roles -- each race fields one of each, so the pack has a fast-but-frail
 # car, a tanky bully and a trigger-happy gunner instead of three clones.
 # (speed multiplier, bonus armour, fire-rate multiplier, ram damage)
 ENEMY_ROLES = (
-    dict(tag="SPR", name="Sprinter", speed=1.14, armor=-1, fire=1.4, ram=1),
+    dict(tag="SPR", name="Sprinter", speed=1.10, armor=-1, fire=1.4, ram=1),
     dict(tag="BRU", name="Bruiser",  speed=0.93, armor=+2, fire=1.2, ram=2),
     dict(tag="GUN", name="Gunner",   speed=1.02, armor=0,  fire=0.6, ram=1),
 )
 
 # Catch-up ("rubber band"): rivals dig in when the player pulls clear, so a
-# good lead never turns into a boring procession. Strength is per-difficulty.
+# good lead never turns into a boring procession -- and throttle back when
+# they break away, so a bad lap never turns into an empty road. Strengths are
+# per-difficulty (`catchup` / `slack` in DIFFICULTIES).
 CATCHUP_START = 900.0          # lead (world units) before rivals respond
 CATCHUP_FULL = 3200.0          # lead at which the surge reaches full strength
+TRAIL_START = 500.0            # deficit before a leading rival starts to lift
+TRAIL_FULL = 2600.0            # deficit at which the lift reaches full slack
+
+# Adaptive difficulty (DDA): a slow, invisible trim on the whole pack's pace.
+# It drifts down while the player is being dropped, up while the player is
+# dropping everyone, and relaxes to neutral in close racing.  Deliberately a
+# few percent at most -- it shapes the race, it never scripts the result.
+DDA_MIN = 0.92                 # softest the pack will go for a struggling player
+DDA_MAX = 1.05                 # firmest it gets for a dominating player
+DDA_STEP = 0.004               # drift per rubber-band tick (4 ticks/second)
+DDA_LEAD = 1400.0              # gap that counts as "running away" either way
 
 # ---------------------------------------------------------------------------
 # Camera

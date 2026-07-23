@@ -32,7 +32,8 @@ def draw_dashboard(g):
     # Armor pips
     lives_col = C.COL_HUD_GOOD if p.lives >= 5 else C.COL_HUD_BAD
     gfx.text_small(x0 + 18, y1 - 64, "ARMOR", C.COL_HUD_DIM)
-    _pips(x0 + 86, y1 - 70, C.PLAYER_MAX_LIVES, p.lives, lives_col, size=13, gap=4)
+    _pips(x0 + 86, y1 - 70, getattr(p, 'max_lives', C.PLAYER_MAX_LIVES),
+          p.lives, lives_col, size=13, gap=4)
 
     # Status chips (boost shows a live recharge bar while on cooldown)
     _boost_indicator(x0 + 18, y1 - 98, p)

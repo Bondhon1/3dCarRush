@@ -203,6 +203,7 @@ class Player:
         self.speed = C.NORMAL_SPEED
         self.gun_angle = 0.0         # relative to car forward
         self.lives = C.PLAYER_MAX_LIVES if lives is None else lives
+        self.max_lives = self.lives   # health kits refill up to the grid armor
         self.finished = False
         self.bump_start = -99.0      # pothole dip animation clock
         self.pitch = 0.0             # current body pitch (bumps + hump crests)
@@ -259,7 +260,8 @@ class Enemy:
         self.jump_start = 0.0
         self.slow_until = 0.0
         self.rage_until = 0.0        # temporary speed surge (player hit a rail)
-        self.catchup = 1.0           # rubber-band multiplier when trailing
+        self.catchup = 1.0           # rubber-band multiplier (trailing OR leading)
+        self.corner_grip = C.ENEMY_CORNER_SLOWDOWN  # per-difficulty AI skill
         self.role = None             # sprinter / bruiser / gunner
         self.tag = "E"               # short label for the HUD
         self.ram = 1                 # damage this rival deals by ramming
@@ -317,17 +319,21 @@ class Enemy:
         target_bank = max(-16.0, min(16.0, -math.degrees(step / max(fs, 1e-3)) * 4.5))
         self.bank += (target_bank - self.bank) * min(1.0, 0.18 * fs)
 
-        # slow proportionally to the heading error -> a believable racing line
+        # slow proportionally to the heading error -> a believable racing line.
+        # corner_grip is the AI's skill knob: low tiers brake hard for corners,
+        # INSANE carries most of its speed through.
         err = min(1.0, abs(diff) / (math.pi / 2))
-        spd = self.speed * (1.0 - (1.0 - C.ENEMY_CORNER_SLOWDOWN) * err)
+        spd = self.speed * (1.0 - (1.0 - self.corner_grip) * err)
         now = time.time()
         if now < self.slow_until:
             spd *= 0.45
         if now < self.rage_until:                 # surge after a player rail bump
             spd *= C.ENEMY_RAGE_FACTOR
-        spd *= self.catchup                       # rubber-band when trailing
+        spd *= self.catchup                       # two-way rubber band + DDA trim
         # climbing a hill costs a rival speed too -- they need the gradient
         spd *= self.grade_factor
+        # no stack of multipliers may outrun the player's boost
+        spd = min(spd, C.ENEMY_SPEED_CAP)
         a = math.radians(self.angle)
         self.pos[0] += spd * fs * math.cos(a)
         self.pos[1] += spd * fs * math.sin(a)

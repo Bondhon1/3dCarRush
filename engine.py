@@ -62,6 +62,7 @@ class Game:
         self.fire_cd = 0.0             # player gun rate limit
         self._catchup_at = 0.0         # next rubber-band recompute
         self._catchup_msg = 0.0        # rate-limit the "closing in" warning
+        self.dda = 1.0                 # adaptive pack-pace trim (see _update_catchup)
         self.difficulty = 3
         # held-key movement state
         self.brake = False
@@ -112,6 +113,7 @@ class Game:
         qx, qy = self.lap_waypoints[-2]
         dd = math.hypot(lx - qx, ly - qy) or 1.0
         self.finish_dir = ((lx - qx) / dd, (ly - qy) / dd)
+        self.dda = 1.0                  # adaptive trim starts neutral each race
         self.spawn_protect_until = time.time() + COUNTDOWN_TIME + 1.0
         self.countdown_start = time.time()
         self.state = COUNTDOWN
@@ -153,6 +155,7 @@ class Game:
             e.lives = max(1, d['enemy_lives'] + role['armor'])
             e.max_lives = e.lives
             e.fire_gap = d['enemy_fire'] * role['fire']
+            e.corner_grip = d.get('corner_grip', C.ENEMY_CORNER_SLOWDOWN)
             # grid slots: staggered behind the start line, across the road
             lane = (-140, 150, -30)[i]
             back = (-90, -90, -230)[i]
@@ -165,11 +168,15 @@ class Game:
     def _spawn_props(self):
         road = list(self.track.road_points)
         random.shuffle(road)
-        self.health_kits = road[:C.NUM_HEALTH_KITS]
-        self.shield_kits = road[C.NUM_HEALTH_KITS:C.NUM_HEALTH_KITS + C.NUM_SHIELD_KITS]
-        i = C.NUM_HEALTH_KITS + C.NUM_SHIELD_KITS
-        n_bombs = C.DIFFICULTIES[getattr(self, 'difficulty', 3)]['bombs']
-        self.bombs = list(road[i:i + n_bombs])
+        # pickup counts scale with the threat level: the higher tiers throw far
+        # more fire and bombs at you, so they also seed more ways to recover
+        d = C.DIFFICULTIES[getattr(self, 'difficulty', 3)]
+        n_health = d.get('health_kits', C.NUM_HEALTH_KITS)
+        n_shield = d.get('shield_kits', C.NUM_SHIELD_KITS)
+        self.health_kits = road[:n_health]
+        self.shield_kits = road[n_health:n_health + n_shield]
+        i = n_health + n_shield
+        self.bombs = list(road[i:i + d['bombs']])
         self._spawn_scenery()
 
     def _spawn_scenery(self):
@@ -488,25 +495,52 @@ class Game:
         audio.set_boost(False)
 
     def _update_catchup(self, now):
-        """Rubber-band the pack: rivals dig in when the player pulls clear.
+        """Two-way rubber band plus a slow adaptive-difficulty trim.
+
+        The band works like the pros build it: a rival who falls behind the
+        player digs in (`catchup`), and a rival who breaks away throttles back
+        (`slack`), so the pack stays within sight without scripting the result.
+        Both strengths are difficulty knobs -- ROOKIE is springy in both
+        directions, INSANE barely lifts for you.
+
+        On top rides `self.dda`, a pack-wide trim of a few percent that drifts
+        down while the player is being dropped and up while the player is
+        dropping everyone.  It moves slowly (full swing takes ~20s), so it is
+        never felt as a snap -- it just keeps the race a race.
 
         Recomputed a few times a second (lap progress is a polyline projection,
         so it isn't worth doing every frame)."""
         if now < self._catchup_at:
             return
         self._catchup_at = now + 0.25
-        strength = C.DIFFICULTIES[getattr(self, 'difficulty', 3)]['catchup']
+        d = C.DIFFICULTIES[getattr(self, 'difficulty', 3)]
+        push, slack = d['catchup'], d.get('slack', 0.0)
         pp = self._lap_progress(self.player.pos[0], self.player.pos[1])
         surging = False
+        best_gap = None                     # most-ahead rival vs. the player
         for e in self.enemies:
             lead = pp - self._lap_progress(e.pos[0], e.pos[1])
-            if lead > C.CATCHUP_START:
+            best_gap = -lead if best_gap is None else max(best_gap, -lead)
+            if lead > C.CATCHUP_START:      # rival trails -> digs in
                 t = min(1.0, (lead - C.CATCHUP_START) /
                         (C.CATCHUP_FULL - C.CATCHUP_START))
-                e.catchup = 1.0 + t * strength
+                band = 1.0 + t * push
                 surging = surging or t > 0.4
+            elif lead < -C.TRAIL_START:     # rival broke away -> throttles back
+                t = min(1.0, (-lead - C.TRAIL_START) /
+                        (C.TRAIL_FULL - C.TRAIL_START))
+                band = 1.0 - t * slack
             else:
-                e.catchup = 1.0
+                band = 1.0
+            e.catchup = band * self.dda
+        # adaptive trim: drift only while someone is genuinely running away
+        if best_gap is not None:
+            if best_gap > C.DDA_LEAD:       # the player is being dropped
+                self.dda = max(C.DDA_MIN, self.dda - C.DDA_STEP)
+            elif best_gap < -C.DDA_LEAD:    # the player is dropping everyone
+                self.dda = min(C.DDA_MAX, self.dda + C.DDA_STEP)
+            else:                           # close racing -> relax to neutral
+                self.dda += (1.0 - self.dda) * 0.05
         if surging and now >= self._catchup_msg:
             self._catchup_msg = now + 9.0
             self.flash("RIVALS CLOSING IN", 1.4)
@@ -643,7 +677,7 @@ class Game:
         # health
         remaining = []
         for (hx, hy) in self.health_kits:
-            if math.hypot(px - hx, py - hy) < 55 and p.lives < C.PLAYER_MAX_LIVES:
+            if math.hypot(px - hx, py - hy) < 55 and p.lives < p.max_lives:
                 p.lives += 1
                 self.flash("+1 LIFE", 1.2)
                 audio.play('pickup', 0.8)
