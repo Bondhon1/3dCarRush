@@ -215,6 +215,7 @@ class Player:
         self.jump_active = False
         self.jump_start = 0.0
         self.jump_mode = None
+        self.wrecked = False          # true once armor runs out -> car hidden
 
     def forward_vec(self):
         a = math.radians(self.angle)
@@ -236,6 +237,8 @@ class Player:
         return C.POTHOLE_BUMP_PITCH * wave * env, -C.POTHOLE_BUMP_DROP * wave * env
 
     def draw(self):
+        if self.wrecked:              # blown up -- the explosion stands in for it
+            return
         draw_car(self.pos[0], self.pos[1], self.pos[2], self.angle,
                  C.COL_PLAYER_BODY, C.COL_PLAYER_ACCENT, self.gun_angle,
                  pitch=self.pitch)

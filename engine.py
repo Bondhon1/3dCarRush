@@ -435,6 +435,13 @@ class Game:
         # enemies
         for e in self.enemies:
             if e.lives <= 0:
+                # the rival is wrecked -- blow it up where it stood before it
+                # respawns further back on the circuit
+                self.explosions.append(props.CarExplosion(
+                    e.pos[0], e.pos[1],
+                    base_z=self.track.height_at(e.pos[0], e.pos[1]),
+                    tint=C.COL_ENEMY_BODY))
+                audio.play('explosion', 0.85)
                 e.respawn()
                 e.pos[2] = (self.track.height_at(e.pos[0], e.pos[1])
                             + C.CAR_GROUND_Z)
@@ -468,6 +475,14 @@ class Game:
     def _lose(self):
         """Transition to the wreck screen with the appropriate audio sting."""
         self.state = LOSE
+        # the player's armor is gone -- wreck the car right where it died and
+        # hide it so the fireball, not an intact car, is what's left behind
+        p = self.player
+        p.wrecked = True
+        self.explosions.append(props.CarExplosion(
+            p.pos[0], p.pos[1],
+            base_z=self.track.height_at(p.pos[0], p.pos[1]),
+            tint=C.COL_PLAYER_BODY, duration=1.6))
         audio.play('explosion', 0.9)
         audio.stop_engine()
         audio.set_boost(False)
@@ -839,7 +854,7 @@ class Game:
         for e in self.enemies:
             props.draw_car_shadow(e.pos, e.angle, base_z=RH(e.pos[0], e.pos[1]))
         self.player.draw()
-        if self.player.boost_active:
+        if self.player.boost_active and not self.player.wrecked:
             props.draw_boost_flames(self.player.pos, self.player.angle)
         for e in self.enemies:
             e.draw()

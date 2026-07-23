@@ -112,6 +112,130 @@ class Explosion:
 
 
 # ---------------------------------------------------------------------------
+# Car explosion -- a car being destroyed: a rolling fireball, a ground
+# shockwave, tumbling debris chunks and a lingering plume of smoke.  Used
+# when a rival is wrecked or the player's armor runs out.
+# ---------------------------------------------------------------------------
+class CarExplosion:
+    def __init__(self, x, y, base_z=0.0, tint=None, duration=1.3):
+        self.x, self.y = x, y
+        self.z = base_z + 18.0            # roughly the car's body height
+        self.start = time.time()
+        self.duration = duration
+        # a car's paint flecks colour the debris; default to a hot orange
+        self.tint = tint or (0.75, 0.75, 0.78)
+        rnd = random.Random(int((x * 13.7 + y * 7.3)) ^ 0x9E37)
+        # tumbling chunks blown outward, each with its own arc and spin
+        self.debris = []
+        for _ in range(14):
+            ang = rnd.uniform(0, 2 * math.pi)
+            speed = rnd.uniform(120, 340)
+            self.debris.append({
+                'vx': math.cos(ang) * speed,
+                'vy': math.sin(ang) * speed,
+                'vz': rnd.uniform(180, 360),
+                'spin': rnd.uniform(180, 620) * rnd.choice((-1, 1)),
+                'axis': (rnd.uniform(-1, 1), rnd.uniform(-1, 1), rnd.uniform(-1, 1)),
+                'size': rnd.uniform(4, 11),
+                'metal': rnd.random() < 0.5,   # metal shard vs painted panel
+            })
+        # smoke puffs drift up and outward as the fireball dies down
+        self.smoke = []
+        for _ in range(7):
+            ang = rnd.uniform(0, 2 * math.pi)
+            self.smoke.append({
+                'dx': math.cos(ang) * rnd.uniform(0, 26),
+                'dy': math.sin(ang) * rnd.uniform(0, 26),
+                'rise': rnd.uniform(70, 150),
+                'r': rnd.uniform(20, 34),
+                'delay': rnd.uniform(0.0, 0.25),
+            })
+
+    @property
+    def alive(self):
+        return time.time() - self.start < self.duration
+
+    def draw(self):
+        t = (time.time() - self.start) / self.duration
+        if t > 1:
+            return
+        g = 520.0                        # debris gravity (units/s^2)
+        life = self.duration
+        gfx.lighting(False)
+        glPushMatrix()
+        glTranslatef(self.x, self.y, self.z)
+
+        # --- ground shockwave: a flat ring flashing outward, early only ---
+        if t < 0.5:
+            st = t / 0.5
+            glPushMatrix()
+            glTranslatef(0, 0, -self.z + 2.0)
+            glColor4f(1.0, 0.85, 0.4, 0.55 * (1 - st))
+            _ring(20 + 150 * st, 6 + 10 * st)
+            glPopMatrix()
+
+        # --- fireball: layered emissive spheres punching up and fading ---
+        if t < 0.65:
+            ft = t / 0.65
+            rise = 34 * ft
+            glPushMatrix()
+            glTranslatef(0, 0, rise)
+            core = 16 + 44 * ft
+            glColor4f(1.0, 0.95, 0.55, (1 - ft) * 0.95)
+            gfx.sphere(core * 0.55, 12, 10)
+            glColor4f(1.0, 0.55, 0.12, (1 - ft) * 0.8)
+            gfx.sphere(core, 14, 12)
+            glColor4f(0.7, 0.22, 0.05, (1 - ft) * 0.5)
+            gfx.sphere(core * 1.4, 14, 12)
+            glPopMatrix()
+
+        # --- tumbling debris chunks on ballistic arcs ---
+        rt = t * life
+        for d in self.debris:
+            dz = d['vz'] * rt - 0.5 * g * rt * rt
+            if dz < -self.z:
+                dz = -self.z          # rest on the ground once it lands
+            glPushMatrix()
+            glTranslatef(d['vx'] * rt, d['vy'] * rt, dz)
+            glRotatef(d['spin'] * rt, *d['axis'])
+            if d['metal']:
+                glColor4f(0.35, 0.36, 0.4, 1 - t * 0.7)
+            else:
+                glColor4f(self.tint[0], self.tint[1], self.tint[2], 1 - t * 0.7)
+            s = d['size']
+            gfx.box(s, s * 0.6, s * 0.4)
+            glPopMatrix()
+
+        # --- smoke plume: dark puffs rising and swelling as fire dies ---
+        for s in self.smoke:
+            if t < s['delay']:
+                continue
+            st = (t - s['delay']) / (1 - s['delay'])
+            shade = 0.28 - 0.12 * st
+            glColor4f(shade, shade * 0.92, shade * 0.88, 0.5 * (1 - st))
+            glPushMatrix()
+            glTranslatef(s['dx'] * (0.5 + st), s['dy'] * (0.5 + st),
+                         28 + s['rise'] * st)
+            gfx.sphere(s['r'] * (0.6 + 0.9 * st), 10, 8)
+            glPopMatrix()
+
+        glPopMatrix()
+        gfx.lighting(True)
+
+
+def _ring(radius, width, segments=28):
+    """A flat filled annulus on the z=0 plane (shockwave / scorch)."""
+    inner = max(0.0, radius - width)
+    glBegin(GL_TRIANGLE_STRIP)
+    for i in range(segments + 1):
+        a = 2 * math.pi * i / segments
+        ca, sa = math.cos(a), math.sin(a)
+        glVertex3f(inner * ca, inner * sa, 0)
+        glVertex3f(radius * ca, radius * sa, 0)
+    glEnd()
+
+
+# ---------------------------------------------------------------------------
 # Speed breaker -- striped hump across the road
 # ---------------------------------------------------------------------------
 def breaker_local(br, x, y):
